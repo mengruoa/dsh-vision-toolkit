@@ -10,7 +10,7 @@
 
 [![由 dshfind 推荐](https://img.shields.io/badge/%E7%94%B1%20dshfind-%E6%8E%A8%E8%8D%90-FFD700?style=flat-square)](https://dshfind.com/zh/plugins/Anionex/dsh-vision-toolkit)
 [![dshfind 评分：94——最高分插件](https://img.shields.io/badge/dshfind%20%E8%AF%84%E5%88%86-94%20%7C%20%E6%9C%80%E9%AB%98%E5%88%86%E6%8F%92%E4%BB%B6-5B4CF0?style=flat-square)](https://dshfind.com/zh/plugins/Anionex/dsh-vision-toolkit)
-[![npm](https://img.shields.io/npm/v/@anionex/dsh-vision-toolkit?style=flat-square&color=5B4CF0)](https://www.npmjs.com/package/@anionex/dsh-vision-toolkit)
+[![npm](https://img.shields.io/npm/v/@mengruo/dsh-vision-toolkit?style=flat-square&color=5B4CF0)](https://www.npmjs.com/package/@mengruo/dsh-vision-toolkit)
 
 [![MIT](https://img.shields.io/badge/license-MIT-0B7285?style=flat-square)](LICENSE)
 [![DSH](https://img.shields.io/badge/DSH-Web%20%2B%20Headless-5B4CF0?style=flat-square)](cordis.patch.yml)
@@ -49,7 +49,7 @@
 > **安装即可使用。** 默认接入内置免费 Gemini 3.7 Flash 视觉服务，不需要申请 API Key。
 
 ```sh
-dsh plugin --profile web add @anionex/dsh-vision-toolkit
+dsh plugin --profile web add @mengruo/dsh-vision-toolkit
 ```
 
 **上游工具箱：** [Anionex/agent-vision-toolkit](https://github.com/Anionex/agent-vision-toolkit) · **项目网站：** [agent-vision.anionex.me](https://agent-vision.anionex.me)
@@ -157,19 +157,19 @@ dsh plugin --profile web add @anionex/dsh-vision-toolkit
 ### 1. 安装
 
 ```sh
-dsh plugin --profile web add @anionex/dsh-vision-toolkit
+dsh plugin --profile web add @mengruo/dsh-vision-toolkit
 ```
 
 Headless Profile 也可以安装：
 
 ```sh
-dsh plugin --profile headless add @anionex/dsh-vision-toolkit
+dsh plugin --profile headless add @mengruo/dsh-vision-toolkit
 ```
 
 使用 **DSH Desktop 桌面版**？桌面版自带 `dsh` 命令行，但有意不写入系统 PATH，请不要在系统终端里执行上面的命令。请从托盘打开 **DSH 终端（Open DSH Terminal）**，在桌面版自己的终端中安装到 Desktop Profile：
 
 ```sh
-dsh plugin --profile desktop add @anionex/dsh-vision-toolkit
+dsh plugin --profile desktop add @mengruo/dsh-vision-toolkit
 ```
 
 安装完成后重启 DSH Desktop。DSH Desktop 2.0.1 内置插件市场的“一键安装”存在已知问题，修复前请优先使用上面的终端命令安装。
@@ -318,7 +318,7 @@ API Key:  https://agent-vision.anionex.me（自动填写）
 | 自定义 Credential 缺失 | 在 **设置 → 视觉工具** 填写 API Key，并确认 Credential 名称与配置一致 |
 | 首次运行时准备失败 | 自动下载托管 Python 需要网络和磁盘权限（默认先走国内镜像，失败时回退 GitHub）；失败时检查网络或包缓存，也可以安装 Python 3.11+ 或在 Settings 中配置 `runtime.python`，然后重新测试 |
 | 找不到 Chrome | 安装 Chrome、Chromium 或 Edge；只有 HTML 截图不可用，其他工具不受影响 |
-| DSH Desktop 提示找不到 `dsh` 命令，或内置插件市场安装失败 | 从托盘打开 **DSH 终端**，运行 `dsh plugin --profile desktop add @anionex/dsh-vision-toolkit`，再重启 DSH Desktop。桌面版 2.0.1 的内置市场存在已知安装问题，当前请优先使用终端安装 |
+| DSH Desktop 提示找不到 `dsh` 命令，或内置插件市场安装失败 | 从托盘打开 **DSH 终端**，运行 `dsh plugin --profile desktop add @mengruo/dsh-vision-toolkit`，再重启 DSH Desktop。桌面版 2.0.1 的内置市场存在已知安装问题，当前请优先使用终端安装 |
 | 产物无法预览 | 使用“打开文件”或结果中的工作区路径；预览 URL 只在 Web 路由可用时存在 |
 
 ## FAQ
@@ -336,7 +336,7 @@ API Key:  https://agent-vision.anionex.me（自动填写）
 ## 开发与社区
 
 - 贡献前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
-- Bug、功能建议和使用问题请提交到 [GitHub Issues](https://github.com/Anionex/dsh-vision-toolkit/issues)；渠道说明见 [SUPPORT.md](SUPPORT.md)。
+- Bug、功能建议和使用问题请提交到 [GitHub Issues](https://github.com/mengruoa/dsh-vision-toolkit/issues)；渠道说明见 [SUPPORT.md](SUPPORT.md)。
 - 安全漏洞请按 [SECURITY.md](SECURITY.md) 私下报告。
 - 版本变化见 [CHANGELOG.md](CHANGELOG.md)，赞助说明见 [FUNDING.md](FUNDING.md)。
 - 通用视觉工具、跨 Agent 接入和视觉任务方法论请访问上游 [agent-vision-toolkit](https://github.com/Anionex/agent-vision-toolkit)。

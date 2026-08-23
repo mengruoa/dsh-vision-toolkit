@@ -1373,7 +1373,7 @@ function LoadedSettings({ controller, t }: SettingsInjected) {
   const updateCheckSupported = updateCapability.checkSupported ?? updateCapability.supported
   const updateHasUnsavedChanges = apiKey.length > 0 || settingsDraftChanged(draft, snapshot.settings.value, t)
   const manualUpdateProfile = updateCapability.profile ?? 'web'
-  const manualUpdateCommand = `dsh plugin --profile ${manualUpdateProfile} add @anionex/dsh-vision-toolkit@latest --registry=https://registry.npmjs.org/`
+  const manualUpdateCommand = `dsh plugin --profile ${manualUpdateProfile} add @mengruo/dsh-vision-toolkit@latest --registry=https://registry.npmjs.org/`
   const aihubmixTutorialUrl = draft?.language === 'en' ? AIHUBMIX_TUTORIAL_URL_EN : AIHUBMIX_TUTORIAL_URL_ZH
   const copyManualUpdate = (): void => {
     void navigator.clipboard?.writeText(manualUpdateCommand)
@@ -1496,11 +1496,11 @@ const CSS = `
 `
 
 function installStyles(): () => void {
-  const id = '@anionex/dsh-vision-toolkit/client'
+  const id = '@mengruo/dsh-vision-toolkit/client'
   const existing = document.querySelector<HTMLStyleElement>(`style[data-plugin-css="${id}"]`)
   if (existing !== null) return () => {}
   const style = document.createElement('style')
-  style.dataset.plugin = '@anionex/dsh-vision-toolkit'
+  style.dataset.plugin = '@mengruo/dsh-vision-toolkit'
   style.dataset.pluginCss = id
   style.textContent = CSS
   document.head.appendChild(style)

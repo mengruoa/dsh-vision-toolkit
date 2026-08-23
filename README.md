@@ -12,7 +12,7 @@
 [![dshfind score: 94 — highest-rated plugin](https://img.shields.io/badge/dshfind%20score-94%20%7C%20highest--rated%20plugin-5B4CF0?style=flat-square)](https://dshfind.com/en/plugins/Anionex/dsh-vision-toolkit)
 [![agentic leaderboard](https://www.theagenticleaderboard.com/badges/new/dsh-vision-toolkit.svg)](https://www.theagenticleaderboard.com)
 
-[![npm](https://img.shields.io/npm/v/@anionex/dsh-vision-toolkit?style=flat-square&color=5B4CF0)](https://www.npmjs.com/package/@anionex/dsh-vision-toolkit)
+[![npm](https://img.shields.io/npm/v/@mengruo/dsh-vision-toolkit?style=flat-square&color=5B4CF0)](https://www.npmjs.com/package/@mengruo/dsh-vision-toolkit)
 [![MIT](https://img.shields.io/badge/license-MIT-0B7285?style=flat-square)](LICENSE)
 [![DSH](https://img.shields.io/badge/DSH-Web%20%2B%20Headless-5B4CF0?style=flat-square)](cordis.patch.yml)
 
@@ -50,7 +50,7 @@ This project has two layers:
 > **Install and use it immediately.** The default setup includes a free Gemini 3.7 Flash vision service and requires no API key.
 
 ```sh
-dsh plugin --profile web add @anionex/dsh-vision-toolkit
+dsh plugin --profile web add @mengruo/dsh-vision-toolkit
 ```
 
 **Upstream toolkit:** [Anionex/agent-vision-toolkit](https://github.com/Anionex/agent-vision-toolkit) · **Project website:** [agent-vision.anionex.me](https://agent-vision.anionex.me)
@@ -157,19 +157,19 @@ The bundled `vision-skills` Skill carries the complete upstream playbooks, expla
 ### 1. Install
 
 ```sh
-dsh plugin --profile web add @anionex/dsh-vision-toolkit
+dsh plugin --profile web add @mengruo/dsh-vision-toolkit
 ```
 
 You can install it into a Headless Profile too:
 
 ```sh
-dsh plugin --profile headless add @anionex/dsh-vision-toolkit
+dsh plugin --profile headless add @mengruo/dsh-vision-toolkit
 ```
 
 Using DSH Desktop? It bundles its own `dsh` CLI and intentionally does not add it to your system PATH. Open **DSH Terminal** from the tray and run the command there, targeting the Desktop profile:
 
 ```sh
-dsh plugin --profile desktop add @anionex/dsh-vision-toolkit
+dsh plugin --profile desktop add @mengruo/dsh-vision-toolkit
 ```
 
 Then restart DSH Desktop. The built-in plugin marketplace in DSH Desktop 2.0.1 has known installation issues; the terminal command above is the reliable path until a fixed Desktop release is available.
@@ -320,7 +320,7 @@ For advanced setups — overriding `runtime.python`, using `runtime.mode: extern
 | A custom Credential is missing | Enter the API key in **Settings → Vision Toolkit** and confirm the Credential name matches the provider configuration |
 | First-time runtime setup fails | The standalone-Python download needs network and disk access (domestic mirror first, GitHub fallback). Check connectivity or package-cache access, or install Python 3.11+ / configure `runtime.python` in Settings, then retry the model test |
 | Chrome is not found | Install Chrome, Chromium, or Edge. Only HTML screenshot rendering is unavailable; the other tools still work |
-| DSH Desktop says `dsh` is not recognized, or its built-in marketplace install fails | Open **DSH Terminal** from the tray, run `dsh plugin --profile desktop add @anionex/dsh-vision-toolkit`, then restart DSH Desktop. The Desktop 2.0.1 marketplace has known install issues, so the terminal command is the reliable path for now |
+| DSH Desktop says `dsh` is not recognized, or its built-in marketplace install fails | Open **DSH Terminal** from the tray, run `dsh plugin --profile desktop add @mengruo/dsh-vision-toolkit`, then restart DSH Desktop. The Desktop 2.0.1 marketplace has known install issues, so the terminal command is the reliable path for now |
 | An artifact cannot be previewed | Use **Open file** or the workspace path in the result. Preview URLs exist only while the Web route is available |
 
 ## FAQ
@@ -338,7 +338,7 @@ If this project is valuable to you, you are welcome to buy the developer a coffe
 ## Development and community
 
 - Read [CONTRIBUTING.md](CONTRIBUTING.md) before contributing.
-- Use [GitHub Issues](https://github.com/Anionex/dsh-vision-toolkit/issues) for bugs, focused feature requests, and usage questions; see [SUPPORT.md](SUPPORT.md) for channel guidance.
+- Use [GitHub Issues](https://github.com/mengruoa/dsh-vision-toolkit/issues) for bugs, focused feature requests, and usage questions; see [SUPPORT.md](SUPPORT.md) for channel guidance.
 - Report vulnerabilities privately through [SECURITY.md](SECURITY.md).
 - See [CHANGELOG.md](CHANGELOG.md) for releases and [FUNDING.md](FUNDING.md) for sponsorship details.
 - Visit upstream [agent-vision-toolkit](https://github.com/Anionex/agent-vision-toolkit) for the general toolkit, cross-agent integrations, and visual-task playbooks.

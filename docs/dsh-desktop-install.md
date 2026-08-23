@@ -21,14 +21,14 @@ If the version prints, the terminal environment is ready. If the command is not 
 Run the following command in the **DSH Terminal**:
 
 ```sh
-dsh plugin --profile desktop add @anionex/dsh-vision-toolkit@0.1.34
+dsh plugin --profile desktop add @mengruo/dsh-vision-toolkit@0.1.34
 ```
 
 Notes:
 
 - `--profile desktop` targets the default `desktop` profile; replace `desktop` with `web` to install into a `web` profile.
 - **Pin an exact version** (currently `0.1.34`). The DSH 1024Store marketplace catalog lags behind npm, so a one-click marketplace install can land on an older version; an explicit version guarantees the latest release.
-- If the active profile is already the target profile, you can omit `--profile desktop` and run `dsh plugin add @anionex/dsh-vision-toolkit@0.1.34` directly.
+- If the active profile is already the target profile, you can omit `--profile desktop` and run `dsh plugin add @mengruo/dsh-vision-toolkit@0.1.34` directly.
 
 ## 3. Restart and verify
 
@@ -39,11 +39,11 @@ Notes:
 
 ## 4. Update to a new version
 
-1. Check the latest version on the [npm page](https://www.npmjs.com/package/@anionex/dsh-vision-toolkit).
+1. Check the latest version on the [npm page](https://www.npmjs.com/package/@mengruo/dsh-vision-toolkit).
 2. In the **DSH Terminal**, rerun the install command with the new version:
 
 ```sh
-dsh plugin --profile desktop add @anionex/dsh-vision-toolkit@<new-version>
+dsh plugin --profile desktop add @mengruo/dsh-vision-toolkit@<new-version>
 ```
 
 3. **Fully quit and reopen DSH Desktop** so the new version takes effect.
@@ -63,5 +63,5 @@ If you installed without pinning an exact version, the official `dsh plugin upda
 ## Links
 
 - [Project website](https://agent-vision.anionex.me)
-- [npm package](https://www.npmjs.com/package/@anionex/dsh-vision-toolkit)
+- [npm package](https://www.npmjs.com/package/@mengruo/dsh-vision-toolkit)
 - [DSH Desktop user guide](https://github.com/anywhere-labs/deepseek-harness-desktop/blob/master/docs/user-guide.en.md)

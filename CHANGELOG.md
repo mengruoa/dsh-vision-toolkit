@@ -4,6 +4,13 @@ All notable user-facing changes to DSH Vision Toolkit are documented in this fil
 
 ## [Unreleased]
 
+## [0.0.1] - 2026-08-23
+
+### Fixed
+
+- Inherited each upstream provider's configured retry policy on its Vision Toolkit image-input variant route.
+- Published this customized package under `@mengruo/dsh-vision-toolkit`.
+
 ## [0.1.38] - 2026-08-20
 
 ### Fixed

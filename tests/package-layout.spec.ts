@@ -128,7 +128,7 @@ describe('package layout contract', () => {
     expect(config).toContain('anthropicThinking')
     expect(config).toContain('userAgent')
     const client = await readFile(join(ROOT, 'lib', 'client.js'), 'utf8')
-    expect(client).toContain('window.__ModuleLoader__.load({ id: "@anionex/dsh-vision-toolkit"')
+    expect(client).toContain('window.__ModuleLoader__.load({ id: "@mengruo/dsh-vision-toolkit"')
     expect(client).toContain('anthropicThinking')
     expect(client).toContain('userAgent')
     expect(client).not.toMatch(/require\("\.\//)

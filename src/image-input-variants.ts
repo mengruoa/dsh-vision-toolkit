@@ -23,6 +23,7 @@ import type {
   LlmProviderInfo,
   LlmResolvedModelInfo,
   Message,
+  ResolvedRetryPolicy,
   StreamChunk,
 } from '@deepseek-ai/dsh-llm'
 // Type-only imports activate the host service declarations on Context.
@@ -547,6 +548,19 @@ export class ImageInputVariantAdapter extends LlmAdapter {
       ...(info.context === undefined ? {} : { context: info.context }),
       ...(info.defaultMaxTokens === undefined ? {} : { defaultMaxTokens: info.defaultMaxTokens }),
       ...(info.reasoning === undefined ? {} : { reasoning: info.reasoning }),
+    }
+  }
+
+  /**
+   * Keep the variant route aligned with the configured upstream route's retry
+   * policy. This route is a wire-only facade; without this delegation it would
+   * silently fall back to the host default policy when selected for images.
+   */
+  override providerRetryPolicy(): ResolvedRetryPolicy | undefined {
+    try {
+      return this.llm.providerRetryPolicy(this.upstream)
+    } catch {
+      return undefined
     }
   }
 

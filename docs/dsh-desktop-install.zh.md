@@ -21,14 +21,14 @@ dsh --version
 在 **DSH 终端** 中运行以下命令：
 
 ```sh
-dsh plugin --profile desktop add @anionex/dsh-vision-toolkit@0.1.34
+dsh plugin --profile desktop add @mengruo/dsh-vision-toolkit@0.1.34
 ```
 
 几点说明：
 
 - `--profile desktop` 表示安装到桌面版默认的 `desktop` Profile；想装到 `web` Profile 时把 `desktop` 换成 `web`。
 - **建议带精确版本号**（当前为 `0.1.34`）。DSH 1024Store 插件市场的目录数据有滞后，市场里一键安装可能装到旧版本；显式写版本号能确保装到最新版。
-- 如果当前激活的 Profile 就是要装的 Profile，也可以省略 `--profile desktop`，直接运行 `dsh plugin add @anionex/dsh-vision-toolkit@0.1.34`。
+- 如果当前激活的 Profile 就是要装的 Profile，也可以省略 `--profile desktop`，直接运行 `dsh plugin add @mengruo/dsh-vision-toolkit@0.1.34`。
 
 ## 3. 重启并验证
 
@@ -39,11 +39,11 @@ dsh plugin --profile desktop add @anionex/dsh-vision-toolkit@0.1.34
 
 ## 4. 更新到新版本
 
-1. 在 [npm 页面](https://www.npmjs.com/package/@anionex/dsh-vision-toolkit) 查看最新版本号。
+1. 在 [npm 页面](https://www.npmjs.com/package/@mengruo/dsh-vision-toolkit) 查看最新版本号。
 2. 在 **DSH 终端** 中，把安装命令里的版本号换成新版本后重新执行：
 
 ```sh
-dsh plugin --profile desktop add @anionex/dsh-vision-toolkit@<新版本号>
+dsh plugin --profile desktop add @mengruo/dsh-vision-toolkit@<新版本号>
 ```
 
 3. 再次**完全退出并重启 DSH Desktop**，新版本才会生效。
@@ -63,5 +63,5 @@ dsh plugin --profile desktop add @anionex/dsh-vision-toolkit@<新版本号>
 ## 相关链接
 
 - [项目主页](https://agent-vision.anionex.me)
-- [npm 包](https://www.npmjs.com/package/@anionex/dsh-vision-toolkit)
+- [npm 包](https://www.npmjs.com/package/@mengruo/dsh-vision-toolkit)
 - [DSH Desktop 用户指南](https://github.com/anywhere-labs/deepseek-harness-desktop/blob/master/docs/user-guide.md)

@@ -10,7 +10,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis';
 import LlmService, { LlmAdapter } from '@deepseek-ai/dsh-llm';
-import type { GenerateOptions, LlmModelInfo, LlmProviderInfo, LlmResolvedModelInfo, Message, StreamChunk } from '@deepseek-ai/dsh-llm';
+import type { GenerateOptions, LlmModelInfo, LlmProviderInfo, LlmResolvedModelInfo, Message, ResolvedRetryPolicy, StreamChunk } from '@deepseek-ai/dsh-llm';
 import type { ResolvedVisionToolkitConfig } from './config.ts';
 import { EvidenceCache } from './evidence-cache.ts';
 import { type PasteSelectionQuery, type PasteVerdict } from './paste-images.ts';
@@ -73,6 +73,12 @@ export declare class ImageInputVariantAdapter extends LlmAdapter {
     providerInfo(provider: string): LlmProviderInfo;
     listModels(provider: string): Promise<readonly LlmModelInfo[]>;
     resolveModel(provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo>;
+    /**
+     * Keep the variant route aligned with the configured upstream route's retry
+     * policy. This route is a wire-only facade; without this delegation it would
+     * silently fall back to the host default policy when selected for images.
+     */
+    providerRetryPolicy(): ResolvedRetryPolicy | undefined;
     stream(options: GenerateOptions): AsyncGenerator<StreamChunk>;
 }
 /**
