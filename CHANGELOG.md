@@ -4,6 +4,13 @@ All notable user-facing changes to DSH Vision Toolkit are documented in this fil
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-08-29
+
+### Added
+
+- Reported the alpha (transparency) channel of locally analyzed images in every image-info block.
+- Online vision service supports multiple provider APIs: enable/disable, per-API resource and concurrency limits, a per-API attempt count, and user-sortable priority. A failed or concurrency-exhausted request fails over to the next provider until all are exhausted, and images that exceed every provider's limits are compressed once before the request.
+
 ## [0.1.39] - 2026-08-25
 
 ### Fixed

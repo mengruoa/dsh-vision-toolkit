@@ -40,7 +40,18 @@ const en = {
   settingsIntro: 'Configure the pinned visual engineering runtime, its external vision endpoint, and local safety limits.',
   externalNotice: 'Remote tools send the selected image bytes to the configured external vision API. Local crop, trace, pixel diff, palette, foreground extraction, and HTML rendering do not upload images.',
   provider: 'Vision service',
-  providerHint: 'Choose the API protocol, then provide the service address, model, and API key used by online vision features.',
+  providerHint: 'Add multiple API endpoints and order them by failover priority. A failed or rate-limited request automatically moves to the next provider; when every provider fails, the request reports an error.',
+  providers: 'Vision providers',
+  name: 'Label',
+  enabled: 'Enabled',
+  priority: 'Priority {index}',
+  attempts: 'Attempts',
+  attemptsHint: 'Total attempts against this provider before failing over to the next one.',
+  addProvider: 'Add provider',
+  moveUp: 'Move up',
+  moveDown: 'Move down',
+  removeProvider: 'Remove',
+  primaryKeyHint: 'The API key field above stores the key for the first provider; additional providers use their own credential names.',
   aihubmixTutorial: 'Need an AIHubMix key for free Gemini 3.7 Flash vision? Follow the signup guide →',
   baseUrl: 'Base URL',
   apiKey: 'API key',
@@ -228,7 +239,18 @@ const zh: Record<LocaleKey, string> = {
   settingsIntro: '在这里设置视觉模型服务、工具运行环境，以及图片和文件的本地访问范围。',
   externalNotice: '使用图像理解、目标定位、界面检测或文字识别等在线功能时，所选图片会发送到下方配置的视觉服务。图片裁剪、轮廓描摹、像素对比、主色提取、前景提取和网页截图均在本机完成，不会上传图片。',
   provider: '在线视觉服务',
-  providerHint: '选择接口协议后，填写在线视觉功能使用的 API 地址、模型名称和 API 密钥。',
+  providerHint: '添加多个 API 并按故障转移优先级排序；某个 API 失败或限流后自动切换到下一个，全部失败才返回错误。',
+  providers: '视觉服务列表',
+  name: '名称',
+  enabled: '启用',
+  priority: '优先级 {index}',
+  attempts: '尝试次数',
+  attemptsHint: '该服务在故障转移到下一个之前最多尝试的次数。',
+  addProvider: '添加服务',
+  moveUp: '上移',
+  moveDown: '下移',
+  removeProvider: '移除',
+  primaryKeyHint: '上方的 API 密钥输入框只保存第一个服务的密钥；其他服务使用各自的凭据名称。',
   aihubmixTutorial: '想申请 AIHubMix Key，并用免费 Gemini 3.7 Flash 识图？看这篇图文教程 →',
   baseUrl: 'API 地址',
   apiKey: 'API 密钥',
@@ -463,6 +485,21 @@ interface HealthResult {
   modelTested: boolean
 }
 
+interface ProviderValue {
+  name?: string
+  enabled?: boolean
+  baseUrl?: string
+  credential?: string
+  model?: string
+  protocol?: 'openai' | 'anthropic'
+  anthropicThinking?: 'omit' | 'disabled' | 'adaptive'
+  userAgent?: string
+  maxImageBytes?: number
+  maxImagePixels?: number
+  concurrency?: number
+  attempts?: number
+}
+
 interface SettingsValue {
   provider?: {
     baseUrl?: string
@@ -472,6 +509,7 @@ interface SettingsValue {
     anthropicThinking?: 'omit' | 'disabled' | 'adaptive'
     userAgent?: string
   }
+  providers?: ProviderValue[]
   language?: 'zh' | 'en'
   timeoutMs?: number
   maxImageBytes?: number
@@ -1070,13 +1108,23 @@ export class VisionSettingsController {
   }
 }
 
-interface Draft {
+interface ProviderDraft {
+  name: string
+  enabled: boolean
   baseUrl: string
   credential: string
   model: string
   protocol: 'openai' | 'anthropic'
   anthropicThinking: 'omit' | 'disabled' | 'adaptive'
   userAgent: string
+  maxImageBytes: string
+  maxImagePixels: string
+  concurrency: string
+  attempts: string
+}
+
+interface Draft {
+  providers: ProviderDraft[]
   language: 'zh' | 'en'
   timeoutMs: string
   maxImageBytes: string
@@ -1092,19 +1140,58 @@ interface Draft {
   variantAutoSwitch: boolean
 }
 
-function draftOf(value: SettingsValue): Draft {
+function emptyProviderDraft(defaults: { maxImageBytes: number; maxImagePixels: number; concurrency: number }): ProviderDraft {
   return {
-    baseUrl: value.provider?.baseUrl ?? BUILT_IN_FREE_VISION_BASE_URL,
-    credential: value.provider?.credential ?? BUILT_IN_FREE_VISION_CREDENTIAL,
-    model: value.provider?.model ?? BUILT_IN_FREE_VISION_MODEL,
-    protocol: value.provider?.protocol ?? 'openai',
-    anthropicThinking: value.provider?.anthropicThinking ?? 'omit',
-    userAgent: value.provider?.userAgent ?? DEFAULT_USER_AGENT,
+    name: '',
+    enabled: true,
+    baseUrl: '',
+    credential: '',
+    model: '',
+    protocol: 'openai',
+    anthropicThinking: 'omit',
+    userAgent: DEFAULT_USER_AGENT,
+    maxImageBytes: String(defaults.maxImageBytes),
+    maxImagePixels: String(defaults.maxImagePixels),
+    concurrency: String(defaults.concurrency),
+    attempts: '3',
+  }
+}
+
+function providerDraftOf(value: ProviderValue | undefined, fallback: ProviderValue | undefined, defaults: { maxImageBytes: number; maxImagePixels: number; concurrency: number }): ProviderDraft {
+  const source = value ?? fallback
+  return {
+    name: source?.name ?? '',
+    enabled: source?.enabled !== false,
+    baseUrl: source?.baseUrl ?? '',
+    credential: source?.credential ?? '',
+    model: source?.model ?? '',
+    protocol: source?.protocol ?? 'openai',
+    anthropicThinking: source?.anthropicThinking ?? 'omit',
+    userAgent: source?.userAgent ?? DEFAULT_USER_AGENT,
+    maxImageBytes: String(source?.maxImageBytes ?? defaults.maxImageBytes),
+    maxImagePixels: String(source?.maxImagePixels ?? defaults.maxImagePixels),
+    concurrency: String(source?.concurrency ?? defaults.concurrency),
+    attempts: String(source?.attempts ?? 3),
+  }
+}
+
+function draftOf(value: SettingsValue): Draft {
+  const globalDefaults = {
+    maxImageBytes: value.maxImageBytes ?? 4194304,
+    maxImagePixels: value.maxImagePixels ?? 20000000,
+    concurrency: value.concurrency ?? 4,
+  }
+  const configured = value.providers ?? []
+  const providers = configured.length > 0
+    ? configured.map(entry => providerDraftOf(entry, undefined, globalDefaults))
+    : [providerDraftOf(undefined, value.provider, globalDefaults)]
+  return {
+    providers,
     language: value.language ?? 'zh',
     timeoutMs: String(value.timeoutMs ?? 30000),
-    maxImageBytes: String(value.maxImageBytes ?? 4194304),
-    maxImagePixels: String(value.maxImagePixels ?? 20000000),
-    concurrency: String(value.concurrency ?? 4),
+    maxImageBytes: String(globalDefaults.maxImageBytes),
+    maxImagePixels: String(globalDefaults.maxImagePixels),
+    concurrency: String(globalDefaults.concurrency),
     runtimeMode: value.runtime?.mode ?? 'managed',
     toolkitPath: value.runtime?.agentVisionToolkitPath ?? '',
     python: value.runtime?.python ?? '',
@@ -1133,15 +1220,31 @@ function apiKeyFailure(value: string, t: Translate): string | undefined {
 }
 
 function valueOf(draft: Draft, t: Translate): SettingsValue {
+  const providers: ProviderValue[] = draft.providers.map(provider => ({
+    ...(provider.name.trim().length === 0 ? {} : { name: provider.name.trim() }),
+    ...(provider.enabled ? {} : { enabled: false }),
+    ...(provider.baseUrl.trim().length === 0 ? {} : { baseUrl: provider.baseUrl.trim() }),
+    ...(provider.credential.trim().length === 0 ? {} : { credential: provider.credential.trim() }),
+    ...(provider.model.trim().length === 0 ? {} : { model: provider.model.trim() }),
+    protocol: provider.protocol,
+    anthropicThinking: provider.anthropicThinking,
+    ...(provider.userAgent.trim() === DEFAULT_USER_AGENT ? {} : { userAgent: provider.userAgent.trim() }),
+    ...(provider.maxImageBytes.trim().length === 0 ? {} : { maxImageBytes: positiveInteger(provider.maxImageBytes, t('maxBytes'), t) }),
+    ...(provider.maxImagePixels.trim().length === 0 ? {} : { maxImagePixels: positiveInteger(provider.maxImagePixels, t('maxPixels'), t) }),
+    ...(provider.concurrency.trim().length === 0 ? {} : { concurrency: positiveInteger(provider.concurrency, t('concurrency'), t) }),
+    ...(provider.attempts.trim().length === 0 ? {} : { attempts: positiveInteger(provider.attempts, t('attempts'), t) }),
+  }))
+  const primary = draft.providers[0]
   return {
     provider: {
-      baseUrl: draft.baseUrl.trim(),
-      credential: draft.credential.trim(),
-      model: draft.model.trim(),
-      protocol: draft.protocol,
-      anthropicThinking: draft.anthropicThinking,
-      userAgent: draft.userAgent.trim(),
+      baseUrl: primary?.baseUrl.trim() || BUILT_IN_FREE_VISION_BASE_URL,
+      credential: primary?.credential.trim() || BUILT_IN_FREE_VISION_CREDENTIAL,
+      model: primary?.model.trim() || BUILT_IN_FREE_VISION_MODEL,
+      protocol: primary?.protocol ?? 'openai',
+      anthropicThinking: primary?.anthropicThinking ?? 'omit',
+      userAgent: primary?.userAgent.trim() || DEFAULT_USER_AGENT,
     },
+    providers,
     language: draft.language,
     timeoutMs: positiveInteger(draft.timeoutMs, t('timeout'), t),
     maxImageBytes: positiveInteger(draft.maxImageBytes, t('maxBytes'), t),
@@ -1173,10 +1276,12 @@ function settingsDraftChanged(draft: Draft, saved: SettingsValue, t: Translate):
 }
 
 function isBuiltInFreeVisionDraft(draft: Draft): boolean {
-  return draft.baseUrl.trim().replace(/\/+$/, '') === BUILT_IN_FREE_VISION_BASE_URL
-    && draft.credential.trim() === BUILT_IN_FREE_VISION_CREDENTIAL
-    && draft.model.trim() === BUILT_IN_FREE_VISION_MODEL
-    && draft.protocol === 'openai'
+  const primary = draft.providers[0]
+  if (primary === undefined) return false
+  return primary.baseUrl.trim().replace(/\/+$/, '') === BUILT_IN_FREE_VISION_BASE_URL
+    && primary.credential.trim() === BUILT_IN_FREE_VISION_CREDENTIAL
+    && primary.model.trim() === BUILT_IN_FREE_VISION_MODEL
+    && primary.protocol === 'openai'
 }
 
 interface SettingsInjected {
@@ -1338,6 +1443,38 @@ function LoadedSettings({ controller, t }: SettingsInjected) {
   }
 
   const update = <K extends keyof Draft>(key: K, value: Draft[K]): void => setDraft(current => current === undefined ? current : { ...current, [key]: value })
+  const updateProvider = <K extends keyof ProviderDraft>(index: number, key: K, value: ProviderDraft[K]): void => {
+    setDraft(current => {
+      if (current === undefined) return current
+      const providers = current.providers.map((provider, i) => i === index ? { ...provider, [key]: value } : provider)
+      return { ...current, providers }
+    })
+  }
+  const addProvider = (): void => {
+    setDraft(current => current === undefined ? current : {
+      ...current,
+      providers: [...current.providers, emptyProviderDraft({
+        maxImageBytes: Number(current.maxImageBytes) || 4194304,
+        maxImagePixels: Number(current.maxImagePixels) || 20000000,
+        concurrency: Number(current.concurrency) || 4,
+      })],
+    })
+  }
+  const removeProvider = (index: number): void => {
+    setDraft(current => current === undefined ? current : { ...current, providers: current.providers.filter((_, i) => i !== index) })
+  }
+  const moveProvider = (index: number, delta: number): void => {
+    setDraft(current => {
+      if (current === undefined) return current
+      const target = index + delta
+      if (target < 0 || target >= current.providers.length) return current
+      const providers = [...current.providers]
+      const [entry] = providers.splice(index, 1)
+      if (entry === undefined) return current
+      providers.splice(target, 0, entry)
+      return { ...current, providers }
+    })
+  }
   const save = (): void => {
     try {
       const keyFailure = apiKeyFailure(apiKey, t)
@@ -1358,7 +1495,7 @@ function LoadedSettings({ controller, t }: SettingsInjected) {
     }
   }
   const busy = state.action !== undefined
-  const credentialMatchesSnapshot = draft.credential.trim() === snapshot.credential.ref
+  const credentialMatchesSnapshot = (draft.providers[0]?.credential.trim() ?? '') === snapshot.credential.ref
   const builtInCredentialChangedProvider = snapshot.credential.source === 'built-in-free'
     && !isBuiltInFreeVisionDraft(draft)
   const keyLocked = credentialMatchesSnapshot
@@ -1400,14 +1537,36 @@ function LoadedSettings({ controller, t }: SettingsInjected) {
       {state.message === 'manual-restart-required' && state.restart !== undefined ? <div className="dvt-alert success">{t('manualRestartRequired', { version: state.restart.toVersion })}</div> : null}
       {snapshot.runtime.lastError === undefined ? null : <div className="dvt-alert error"><strong>{runtimeErrorTitle}</strong><span>{snapshot.runtime.lastError}</span></div>}
 
-      <section className="dvt-panel dvt-essential"><div className="dvt-panel-title"><div><h3>{t('provider')}</h3><p>{t('providerHint')}</p></div><span className={`dvt-badge ${snapshot.credential.configured ? 'ok' : 'error'}`}>{snapshot.credential.configured ? t('configured') : t('missing')}</span></div>
+      <section className="dvt-panel dvt-essential"><div className="dvt-panel-title"><div><h3>{t('providers')}</h3><p>{t('providerHint')}</p></div><span className={`dvt-badge ${snapshot.credential.configured ? 'ok' : 'error'}`}>{snapshot.credential.configured ? t('configured') : t('missing')}</span></div>
         <p className="dvt-tutorial-link"><a href={aihubmixTutorialUrl} target="_blank" rel="noreferrer">{t('aihubmixTutorial')}</a></p>
-        <div className="dvt-form-grid">
-          <Field label={t('protocol')}><select disabled={!snapshot.writable || busy} value={draft.protocol} onChange={(event) => { update('protocol', event.target.value as 'openai' | 'anthropic') }}><option value="openai">OpenAI Chat Completions</option><option value="anthropic">Anthropic Messages</option></select></Field>
-          <Field label={t('baseUrl')}><Input disabled={!snapshot.writable || busy} value={draft.baseUrl} onChange={(event) => { update('baseUrl', event.target.value) }} /></Field>
-          <Field label={t('model')}><Input disabled={!snapshot.writable || busy} value={draft.model} onChange={(event) => { update('model', event.target.value) }} /></Field>
-          <Field label={t('apiKey')} hint={keyLocked ? t('apiKeyLocked') : snapshot.credential.source === undefined ? t('apiKeyHint') : `${t('apiKeyHint')} ${t('sourceHint', { source: t('source'), value: credentialSource(snapshot.credential.source, t) })}`}><Input aria-label={t('apiKey')} type="password" autoComplete="new-password" disabled={busy || keyLocked} placeholder={snapshot.credential.configured ? t('apiKeyPlaceholderConfigured') : t('apiKeyPlaceholderMissing')} value={apiKey} onChange={(event) => { setApiKey(event.target.value); setDraftError(undefined) }} /></Field>
-        </div>
+        {draft.providers.map((provider, index) => (
+          <div key={index} className="dvt-provider-card">
+            <div className="dvt-provider-head">
+              <label className="dvt-check"><input type="checkbox" checked={provider.enabled} disabled={!snapshot.writable || busy} onChange={(event) => { updateProvider(index, 'enabled', event.target.checked) }} /><span>{t('enabled')}</span></label>
+              <span className="dvt-provider-priority">{t('priority', { index: index + 1 })}</span>
+              <div className="dvt-provider-actions">
+                <button type="button" aria-label={t('moveUp')} title={t('moveUp')} disabled={!snapshot.writable || busy || index === 0} onClick={() => { moveProvider(index, -1) }}>↑</button>
+                <button type="button" aria-label={t('moveDown')} title={t('moveDown')} disabled={!snapshot.writable || busy || index === draft.providers.length - 1} onClick={() => { moveProvider(index, 1) }}>↓</button>
+                <button type="button" aria-label={t('removeProvider')} title={t('removeProvider')} disabled={!snapshot.writable || busy || draft.providers.length <= 1} onClick={() => { removeProvider(index) }}>×</button>
+              </div>
+            </div>
+            <div className="dvt-form-grid">
+              <Field label={t('name')}><Input aria-label={t('name')} value={provider.name} onChange={(event) => { updateProvider(index, 'name', event.target.value) }} placeholder={provider.model || t('model')} /></Field>
+              <Field label={t('model')}><Input aria-label={t('model')} disabled={!snapshot.writable || busy} value={provider.model} onChange={(event) => { updateProvider(index, 'model', event.target.value) }} /></Field>
+              <Field label={t('baseUrl')}><Input aria-label={t('baseUrl')} disabled={!snapshot.writable || busy} value={provider.baseUrl} onChange={(event) => { updateProvider(index, 'baseUrl', event.target.value) }} /></Field>
+              <Field label={t('credential')} hint={t('credentialHint')}><Input aria-label={t('credential')} disabled={!snapshot.writable || busy} value={provider.credential} onChange={(event) => { updateProvider(index, 'credential', event.target.value) }} /></Field>
+              <Field label={t('protocol')}><select aria-label={t('protocol')} disabled={!snapshot.writable || busy} value={provider.protocol} onChange={(event) => { updateProvider(index, 'protocol', event.target.value as 'openai' | 'anthropic') }}><option value="openai">OpenAI Chat Completions</option><option value="anthropic">Anthropic Messages</option></select></Field>
+              <Field label={t('userAgent')}><Input aria-label={t('userAgent')} value={provider.userAgent} onChange={(event) => { updateProvider(index, 'userAgent', event.target.value) }} /></Field>
+              {provider.protocol === 'anthropic' ? <Field label={t('anthropicThinking')} hint={t('anthropicThinkingHint')}><select aria-label={t('anthropicThinking')} value={provider.anthropicThinking} onChange={(event) => { updateProvider(index, 'anthropicThinking', event.target.value as 'omit' | 'disabled' | 'adaptive') }}><option value="omit">omit (widest compatibility)</option><option value="disabled">disabled (model support required)</option><option value="adaptive">adaptive (model support required)</option></select></Field> : null}
+              <Field label={t('maxBytes')}><Input aria-label={t('maxBytes')} inputMode="numeric" value={provider.maxImageBytes} onChange={(event) => { updateProvider(index, 'maxImageBytes', event.target.value) }} /></Field>
+              <Field label={t('maxPixels')}><Input aria-label={t('maxPixels')} inputMode="numeric" value={provider.maxImagePixels} onChange={(event) => { updateProvider(index, 'maxImagePixels', event.target.value) }} /></Field>
+              <Field label={t('concurrency')}><Input aria-label={t('concurrency')} inputMode="numeric" value={provider.concurrency} onChange={(event) => { updateProvider(index, 'concurrency', event.target.value) }} /></Field>
+              <Field label={t('attempts')} hint={t('attemptsHint')}><Input aria-label={t('attempts')} inputMode="numeric" value={provider.attempts} onChange={(event) => { updateProvider(index, 'attempts', event.target.value) }} /></Field>
+            </div>
+          </div>
+        ))}
+        <div className="dvt-actions"><Button variant="outline" disabled={!snapshot.writable || busy} onClick={addProvider}>{t('addProvider')}</Button></div>
+        <Field label={t('apiKey')} hint={keyLocked ? t('apiKeyLocked') : `${snapshot.credential.source === undefined ? t('apiKeyHint') : `${t('apiKeyHint')} ${t('sourceHint', { source: t('source'), value: credentialSource(snapshot.credential.source, t) })}`} ${t('primaryKeyHint')}`}><Input aria-label={t('apiKey')} type="password" autoComplete="new-password" disabled={busy || keyLocked} placeholder={snapshot.credential.configured ? t('apiKeyPlaceholderConfigured') : t('apiKeyPlaceholderMissing')} value={apiKey} onChange={(event) => { setApiKey(event.target.value); setDraftError(undefined) }} /></Field>
       </section>
 
       <div className="dvt-save-row"><Button variant="primary" disabled={!canSave || busy} onClick={save}>{state.action === 'save' ? t('saving') : t('save')}</Button><Button variant="outline" disabled={busy} onClick={() => { void controller.load() }}>{t('reload')}</Button></div>
@@ -1447,12 +1606,6 @@ function LoadedSettings({ controller, t }: SettingsInjected) {
       <details className="dvt-advanced">
         <summary><span><strong>{t('advanced')}</strong><small>{t('advancedHint')}</small></span><span className="dvt-details-chevron" aria-hidden="true">⌄</span></summary>
         <div className="dvt-advanced-body">
-          <section className="dvt-panel"><div className="dvt-panel-title"><h3>{t('provider')}</h3></div><div className="dvt-form-grid">
-            <Field label={t('credential')} hint={t('credentialHint')}><Input aria-label={t('credential')} disabled={!snapshot.writable || busy} value={draft.credential} onChange={(event) => { update('credential', event.target.value) }} /></Field>
-            {draft.protocol === 'anthropic' ? <Field label={t('anthropicThinking')} hint={t('anthropicThinkingHint')}><select aria-label={t('anthropicThinking')} value={draft.anthropicThinking} onChange={(event) => { update('anthropicThinking', event.target.value as 'omit' | 'disabled' | 'adaptive') }}><option value="omit">omit (widest compatibility)</option><option value="disabled">disabled (model support required)</option><option value="adaptive">adaptive (model support required)</option></select></Field> : null}
-            <Field label={t('userAgent')}><Input value={draft.userAgent} onChange={(event) => { update('userAgent', event.target.value) }} /></Field>
-          </div></section>
-
           <section className="dvt-panel"><div className="dvt-panel-title"><h3>{t('limits')}</h3></div><div className="dvt-form-grid">
             <Field label={t('language')}><select value={draft.language} onChange={(event) => { update('language', event.target.value as 'zh' | 'en') }}><option value="zh">中文</option><option value="en">English</option></select></Field>
             <Field label={t('timeout')}><Input inputMode="numeric" value={draft.timeoutMs} onChange={(event) => { update('timeoutMs', event.target.value) }} /></Field>
@@ -1492,6 +1645,7 @@ const CSS = `
 .dvt-settings-footer{margin-top:8px;padding:20px 2px 4px;border-top:1px solid var(--dsw-alias-border-l1);opacity:.82}.dvt-settings-footer h2{font-size:18px;letter-spacing:-.015em;margin:3px 0 5px}.dvt-settings-footer p{font-size:11px;line-height:1.5}.dvt-release{min-width:220px}.dvt-release span{white-space:nowrap}.dvt-essential{border-color:color-mix(in srgb,var(--dsw-alias-state-business-primary) 30%,var(--dsw-alias-border-l1));box-shadow:var(--dsw-shadow-lv1),0 0 0 3px color-mix(in srgb,var(--dsw-alias-state-business-primary) 5%,transparent)}.dvt-advanced{border:1px solid var(--dsw-alias-border-l1);border-radius:14px;background:var(--dsw-alias-bg-layer-1);overflow:hidden}.dvt-advanced>summary{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 15px;cursor:pointer;list-style:none}.dvt-advanced>summary::-webkit-details-marker{display:none}.dvt-advanced>summary>span:first-child{display:grid;gap:3px}.dvt-advanced>summary strong{font-size:13px}.dvt-advanced>summary small{font-size:10px;line-height:1.45;color:var(--dsw-alias-label-secondary);font-weight:400}.dvt-details-chevron{font-size:15px;opacity:.55;transition:transform .16s ease}.dvt-advanced[open] .dvt-details-chevron{transform:rotate(180deg)}.dvt-advanced-body{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;padding:0 12px 12px}.dvt-advanced-body>.dvt-panel{box-shadow:none}
 .dvt-health-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px}.dvt-health-grid>div{padding:9px 10px;border-radius:9px;background:var(--dsw-alias-bg-layer-2);border-left:3px solid var(--dsw-alias-border-l4)}.dvt-health-grid>div[data-status=ok]{border-left-color:var(--dsw-alias-state-success-primary)}.dvt-health-grid>div[data-status=warning],.dvt-health-grid>div[data-status=not_tested]{border-left-color:var(--dsw-alias-state-warn-primary)}.dvt-health-grid>div[data-status=error]{border-left-color:var(--dsw-alias-state-error-primary)}.dvt-health-grid span{font-size:10px;text-transform:capitalize}.dvt-health-grid strong{float:right;font-size:9px;text-transform:uppercase;color:var(--dsw-alias-label-secondary)}.dvt-health-test-tag{display:inline-flex;margin-left:6px;padding:1px 6px;border-radius:999px;background:var(--dsw-alias-bg-layer-1);font-size:9px;font-style:normal;font-weight:600;color:var(--dsw-alias-label-secondary)}.dvt-health-test-tag[data-status=ok]{background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 12%,transparent);color:var(--dsw-alias-state-success-primary)}.dvt-health-test-tag[data-status=warning]{background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 12%,transparent);color:var(--dsw-alias-state-warn-label)}.dvt-health-test-tag[data-status=error]{background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 12%,transparent);color:var(--dsw-alias-state-error-primary)}.dvt-health-grid p{clear:both;margin:5px 0 0;font-size:10px;line-height:1.4;color:var(--dsw-alias-label-secondary)}.dvt-loading{padding:24px;border-radius:12px;background:var(--dsw-alias-bg-layer-2);font-size:12px;color:var(--dsw-alias-label-secondary)}
 .dvt-paste-dock{box-sizing:border-box;width:calc(100% - 32px);max-width:var(--dsh-composer-card-max-width,960px);margin:0 auto;display:flex;flex-wrap:wrap;gap:6px;padding:0 2px 6px}.dvt-paste-chip{max-width:100%;height:32px;box-sizing:border-box;display:flex;align-items:center;gap:7px;padding:0 6px 0 10px;border:1px solid var(--dsw-alias-border-l1);border-radius:9px;background:var(--dsw-specific-tip);font-size:12px}.dvt-paste-chip[data-status=copying]{border-color:var(--dsw-alias-state-business-primary)}.dvt-paste-chip[data-status=error]{border-color:var(--dsw-alias-state-error-primary)}.dvt-paste-name{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dvt-paste-detail{color:var(--dsw-alias-label-caption);max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dvt-paste-chip[data-status=error] .dvt-paste-detail{color:var(--dsw-alias-state-error-primary)}.dvt-paste-chip button{width:20px;height:20px;display:grid;place-items:center;border:0;border-radius:50%;padding:0;background:transparent;color:var(--dsw-alias-label-caption);font:inherit;font-size:16px;cursor:pointer}.dvt-paste-chip button:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.dvt-paste-chip button:disabled{opacity:.4;cursor:default}
+.dvt-provider-card{border:1px solid var(--dsw-alias-border-l1);border-radius:10px;padding:9px 10px;display:grid;gap:8px;background:var(--dsw-alias-bg-layer-2)}.dvt-provider-head{display:flex;align-items:center;gap:10px}.dvt-provider-priority{margin-left:auto;font-size:11px;color:var(--dsw-alias-label-secondary);white-space:nowrap}.dvt-provider-actions{display:flex;gap:4px}.dvt-provider-actions button{width:26px;height:26px;display:grid;place-items:center;border:1px solid var(--dsw-alias-border-l1);border-radius:7px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);cursor:pointer;font-size:14px;line-height:1}.dvt-provider-actions button:hover{background:var(--dsw-alias-interactive-bg-hover)}.dvt-provider-actions button:disabled{opacity:.35;cursor:default}
 @media(max-width:720px){.dvt-settings-footer{display:grid}.dvt-release{width:auto}.dvt-form-grid,.dvt-update-grid{grid-template-columns:1fr}.dvt-metrics{grid-template-columns:1fr}.dvt-artifact-meta{align-items:flex-start;flex-direction:column}.dvt-panel-title{flex-direction:column}}
 `
 

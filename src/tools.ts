@@ -97,6 +97,7 @@ const imageInfoSchema = {
     width: { type: 'integer', required: true },
     height: { type: 'integer', required: true },
     format: { type: 'string', required: true },
+    hasAlpha: { type: 'boolean', required: true, description: 'Whether the analyzed image carries an alpha (transparency) channel.' },
     originalPath: { type: 'string', required: true, description: 'Original image path before automatic compression.' },
   },
 } as const satisfies ValueSchemaSpec

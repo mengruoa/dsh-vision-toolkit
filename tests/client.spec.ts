@@ -343,7 +343,7 @@ describe('Vision Toolkit client plugin', () => {
     expect(root?.querySelector('.dvt-essential')).toBe(essential)
     expect(root?.lastElementChild).toBe(footer)
     expect(advanced).not.toBeNull()
-    expect(advanced?.contains(screen.getByLabelText('credential'))).toBe(true)
+    expect(essential?.contains(screen.getByLabelText('credential'))).toBe(true)
     expect(view.container.querySelector('.dvt-settings-header')).toBeNull()
   })
 

@@ -127,3 +127,52 @@ describe('resolveConfig', () => {
     expect(() => resolveConfig({ runtime: { python: '  ' } })).toThrowError(/runtime\.python/)
   })
 })
+
+describe('resolveConfig providers', () => {
+  it('resolves an ordered provider pool with inherited limits', () => {
+    const config = resolveConfig({
+      providers: [
+        { name: 'A', baseUrl: 'https://a.example/v1', credential: 'KEY_A', model: 'model-a' },
+        { name: 'B', baseUrl: 'https://b.example/v1', credential: 'KEY_B', model: 'model-b', attempts: 5, concurrency: 2 },
+      ],
+      maxImageBytes: 1048576,
+      maxImagePixels: 8000000,
+      concurrency: 6,
+    })
+    expect(config.providers).toHaveLength(2)
+    const [a, b] = config.providers
+    expect(a).toMatchObject({
+      name: 'A', enabled: true, baseUrl: 'https://a.example/v1', model: 'model-a',
+      maxImageBytes: 1048576, maxImagePixels: 8000000, concurrency: 6, attempts: 3,
+    })
+    expect(b).toMatchObject({ name: 'B', attempts: 5, concurrency: 2, enabled: true })
+    expect(config.provider.baseUrl).toBe('https://a.example/v1')
+    expect(config.provider.model).toBe('model-a')
+  })
+
+  it('keeps disabled providers valid with blank connection fields', () => {
+    const config = resolveConfig({
+      providers: [
+        { name: 'on', baseUrl: 'https://on.example/v1', credential: 'KEY', model: 'm' },
+        { name: 'off', enabled: false },
+      ],
+    })
+    expect(config.providers[1]).toMatchObject({ enabled: false, baseUrl: BUILT_IN_FREE_VISION_BASE_URL })
+    expect(config.provider.baseUrl).toBe('https://on.example/v1')
+  })
+
+  it('rejects an enabled provider with an empty connection field', () => {
+    expect(() => resolveConfig({ providers: [{ name: 'x', model: 'm', credential: 'KEY' }] }))
+      .toThrowError(/providers\[0\]\.baseUrl/)
+    expect(() => resolveConfig({ providers: [{ name: 'x', baseUrl: 'https://x.example/v1', credential: 'KEY' }] }))
+      .toThrowError(/providers\[0\]\.model/)
+    expect(() => resolveConfig({ providers: [{ name: 'x', baseUrl: 'https://x.example/v1', model: 'm' }] }))
+      .toThrowError(/providers\[0\]\.credential/)
+  })
+
+  it('falls back to the legacy provider when providers is empty', () => {
+    const config = resolveConfig({ provider: { baseUrl: 'https://legacy.example/v1', credential: 'KEY', model: 'm' } })
+    expect(config.providers).toHaveLength(1)
+    expect(config.providers[0]).toMatchObject({ baseUrl: 'https://legacy.example/v1', model: 'm', enabled: true })
+  })
+})

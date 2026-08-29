@@ -176,6 +176,8 @@ export interface CompressedImageInfo {
   height: number
   format: 'png' | 'jpeg' | 'gif' | 'webp'
   mode: string
+  /** True when the saved image carries an alpha (transparency) channel. */
+  hasAlpha: boolean
   lossy: boolean
   resized: boolean
   candidate: string
@@ -614,7 +616,7 @@ const COMPRESS_IMAGE_SCRIPT = [
   '        if icc is not None: kwargs["icc_profile"]=icc',
   '    im.save(path,format=fmt,**kwargs)',
   '    with Image.open(path) as saved:',
-  '        return os.path.getsize(path),(saved.format or "unknown").lower(),saved.mode',
+  '        return os.path.getsize(path),(saved.format or "unknown").lower(),saved.mode,saved.mode in ("RGBA","LA") or (saved.mode=="P" and "transparency" in saved.info)',
   'def has_alpha(im):',
   '    return im.mode in ("RGBA","LA") or (im.mode=="P" and "transparency" in im.info)',
   'def flatten(im):',
@@ -672,11 +674,11 @@ const COMPRESS_IMAGE_SCRIPT = [
   '        candidates=[]',
   '    for label,fmt,lossy,saver in candidates:',
   '        try:',
-  '            size,saved_fmt,mode=saver()',
+  '            size,saved_fmt,mode,has_alpha=saver()',
   '        except Exception:',
   '            continue',
   '        if ok(w,h,size):',
-  '            print(json.dumps({"ok":True,"bytes":size,"width":w,"height":h,"format":fmt,"mode":mode,"lossy":lossy,"resized":step>0,"candidate":label,"source_animated":meta["animated"]}))',
+  '            print(json.dumps({"ok":True,"bytes":size,"width":w,"height":h,"format":fmt,"mode":mode,"has_alpha":has_alpha,"lossy":lossy,"resized":step>0,"candidate":label,"source_animated":meta["animated"]}))',
   '            sys.exit(0)',
   '        if best is None or size<best[0]:',
   '            best=(size,label,fmt,lossy,step>0)',
@@ -799,13 +801,15 @@ export class UpstreamAdapter {
   async probeImageSize(
     imagePath: string,
     options: { signal: AbortSignal },
-  ): Promise<{ width: number; height: number; format: string; mode: string }> {
+  ): Promise<{ width: number; height: number; format: string; mode: string; hasAlpha: boolean }> {
     if (this.prepared === undefined) await this.prepare()
     const prepared = this.requirePrepared()
     const script = [
       'import json,sys',
       'from PIL import Image',
-      'with Image.open(sys.argv[1]) as im: print(json.dumps({"width":im.width,"height":im.height,"format":str(im.format or "unknown").lower(),"mode":str(im.mode)}))',
+      'with Image.open(sys.argv[1]) as im:',
+      '    has_alpha = im.mode in ("RGBA","LA") or (im.mode=="P" and "transparency" in im.info)',
+      '    print(json.dumps({"width":im.width,"height":im.height,"format":str(im.format or "unknown").lower(),"mode":str(im.mode),"has_alpha":has_alpha}))',
     ].join('\n')
     let handle: SubprocessHandle
     try {
@@ -829,18 +833,19 @@ export class UpstreamAdapter {
       throw new VisionToolkitError('input', `cannot decode image: ${outcome.stderr.trim() || 'unsupported or corrupt file'}`)
     }
     try {
-      const parsed = JSON.parse(outcome.stdout) as { width?: unknown; height?: unknown; format?: unknown; mode?: unknown }
+      const parsed = JSON.parse(outcome.stdout) as { width?: unknown; height?: unknown; format?: unknown; mode?: unknown; has_alpha?: unknown }
       if (
         typeof parsed.width !== 'number'
         || typeof parsed.height !== 'number'
         || typeof parsed.format !== 'string'
         || typeof parsed.mode !== 'string'
+        || typeof parsed.has_alpha !== 'boolean'
         || !Number.isInteger(parsed.width)
         || !Number.isInteger(parsed.height)
         || parsed.width <= 0
         || parsed.height <= 0
       ) throw new Error('invalid dimensions')
-      return { width: parsed.width, height: parsed.height, format: parsed.format, mode: parsed.mode }
+      return { width: parsed.width, height: parsed.height, format: parsed.format, mode: parsed.mode, hasAlpha: parsed.has_alpha }
     } catch (error) {
       throw new VisionToolkitError('output', 'cannot read image dimensions: unexpected Python output', { cause: error })
     }
@@ -884,7 +889,7 @@ export class UpstreamAdapter {
       const detail = typeof record.error === 'string' ? record.error : 'compression failed'
       throw new VisionToolkitError('capacity', `cannot compress image under ${maxBytes} bytes: ${detail}`)
     }
-    const { bytes, width, height, format, mode, lossy, resized, candidate, source_animated } = record
+    const { bytes, width, height, format, mode, has_alpha, lossy, resized, candidate, source_animated } = record
     if (
       typeof bytes !== 'number' || !Number.isInteger(bytes) || bytes < 1 || bytes > maxBytes
       || typeof width !== 'number' || !Number.isInteger(width) || width < 1
@@ -892,6 +897,7 @@ export class UpstreamAdapter {
       || width * height > maxPixels
       || typeof format !== 'string' || !COMPRESSED_FORMATS.has(format)
       || typeof mode !== 'string' || mode.length === 0
+      || typeof has_alpha !== 'boolean'
       || typeof lossy !== 'boolean'
       || typeof resized !== 'boolean'
       || typeof candidate !== 'string' || candidate.length === 0
@@ -905,6 +911,7 @@ export class UpstreamAdapter {
       height,
       format: format as CompressedImageInfo['format'],
       mode,
+      hasAlpha: has_alpha,
       lossy,
       resized,
       candidate,

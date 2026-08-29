@@ -938,8 +938,8 @@ class TrackingAdapter extends UpstreamAdapter {
   delayMs = 40
   maxActive = 0
 
-  override probeImageSize(): Promise<{ width: number; height: number; format: string }> {
-    return Promise.resolve({ width: 256, height: 256, format: 'png' })
+  override probeImageSize(): Promise<{ width: number; height: number; format: string; mode: string; hasAlpha: boolean }> {
+    return Promise.resolve({ width: 256, height: 256, format: 'png', mode: 'RGB', hasAlpha: false })
   }
 
   override async run(

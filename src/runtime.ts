@@ -14,7 +14,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { ResolvedCredential } from '@deepseek-ai/dsh-credentials'
 import { SaxesParser } from 'saxes'
 import { describeArtifact, type ArtifactDescriptor } from './artifacts.ts'
-import { isBuiltInFreeVisionProvider, type ResolvedVisionToolkitConfig } from './config.ts'
+import { isBuiltInFreeVisionProvider, type ResolvedProvider, type ResolvedVisionToolkitConfig } from './config.ts'
 import { BUILT_IN_FREE_VISION_KEY } from './defaults.ts'
 import { evidenceRuntimeFingerprint } from './evidence-cache.ts'
 import { VisionToolkitError } from './errors.ts'
@@ -194,6 +194,16 @@ export class Semaphore {
       next.resolve()
     }
   }
+
+  /** Non-blocking acquisition: claim a free slot immediately, else return false. */
+  tryAcquire(permits = 1): boolean {
+    if (!Number.isInteger(permits) || permits < 1 || permits > this.limit) return false
+    if (this.waiters.length === 0 && this.active + permits <= this.limit) {
+      this.active += permits
+      return true
+    }
+    return false
+  }
 }
 
 /** Validated image metadata retained in structured results and diagnostics. */
@@ -203,6 +213,8 @@ export interface ImageInfo {
   width: number
   height: number
   format: string
+  /** True when the analyzed image carries an alpha (transparency) channel. */
+  hasAlpha: boolean
   /** Original user-facing image path before any automatic compression. */
   originalPath: string
 }
@@ -686,10 +698,17 @@ export function parseRegion(region: string): { x1: number; y1: number; x2: numbe
   return box
 }
 
+/** One enabled provider paired with its resolved upstream environment. */
+interface ResolvedProviderEnv {
+  provider: ResolvedProvider
+  env: UpstreamEnvironment
+}
+
 /** Runtime facade used by every native tool. */
 export class VisionToolkitRuntime {
   private readonly semaphores = new Map<string, Semaphore>()
   private readonly glanceCache = new WeakMap<object, GlanceCacheEntry>()
+  private readonly providerGates = new Map<string, Semaphore>()
   private readonly adapter: UpstreamAdapter
 
   constructor(
@@ -712,15 +731,22 @@ export class VisionToolkitRuntime {
 
   /** Capture the credential and provider identity used by one evidence conversion. */
   async captureEvidenceRuntime(): Promise<CapturedEvidenceRuntime> {
-    const env = await this.resolveVisionEnv()
-    const evidenceFingerprint = evidenceRuntimeFingerprint(
-      this.config,
-      createHash('sha256').update(env.VISION_API_KEY).digest('hex'),
-      env.VISION_SSL_VERIFY,
-    )
+    // The primary provider's key hash sharpens cache invalidation, but a
+    // missing primary credential must not block evidence conversion when a
+    // later provider in the failover pool is available.
+    let credentialSha256: string | undefined
+    let sslVerify: string | undefined
+    try {
+      const env = await this.resolveVisionEnv()
+      credentialSha256 = createHash('sha256').update(env.VISION_API_KEY).digest('hex')
+      sslVerify = env.VISION_SSL_VERIFY
+    } catch {
+      credentialSha256 = undefined
+    }
+    const evidenceFingerprint = evidenceRuntimeFingerprint(this.config, credentialSha256, sslVerify)
     return Object.freeze({
       evidenceFingerprint,
-      glance: (request: GlanceRequest, options: ToolCallOptions) => this.glanceWithEnv(request, options, env),
+      glance: (request: GlanceRequest, options: ToolCallOptions) => this.glanceWithEnv(request, options),
     })
   }
 
@@ -851,32 +877,76 @@ export class VisionToolkitRuntime {
     }
   }
 
-  /** Resolve the configured credential at the remote-operation boundary. */
-  async resolveVisionEnv(): Promise<UpstreamEnvironment> {
-    const resolved: ResolvedCredential | undefined = isBuiltInFreeVisionProvider(this.config.provider)
-      ? { value: BUILT_IN_FREE_VISION_KEY, source: 'built-in' }
-      : await this.ctx.credentials.resolve(this.config.provider.credential)
-    if (resolved === undefined) {
-      throw new VisionToolkitError(
-        'config',
-        `credential ${this.config.provider.credential} is not configured; set it through DSH credentials`,
-      )
-    }
-    return this.visionEnv(resolved)
+  /** Highest-priority enabled provider, falling back to the first entry. */
+  private get primaryProvider(): ResolvedProvider {
+    return this.config.providers.find(provider => provider.enabled) ?? this.config.providers[0]!
   }
 
-  private visionEnv(resolved: ResolvedCredential): UpstreamEnvironment {
+  /** Build the upstream environment for one resolved provider. */
+  private providerEnv(provider: ResolvedProvider, resolved: ResolvedCredential): UpstreamEnvironment {
     const sslVerify = process.env.VISION_SSL_VERIFY?.trim()
     return {
       VISION_API_KEY: resolved.value,
-      VISION_BASE_URL: this.config.provider.baseUrl,
-      VISION_MODEL: this.config.provider.model,
-      VISION_API_PROTOCOL: this.config.provider.protocol === 'anthropic' ? 'anthropic' : 'chat_completions',
-      VISION_ANTHROPIC_THINKING: this.config.provider.anthropicThinking,
+      VISION_BASE_URL: provider.baseUrl,
+      VISION_MODEL: provider.model,
+      VISION_API_PROTOCOL: provider.protocol === 'anthropic' ? 'anthropic' : 'chat_completions',
+      VISION_ANTHROPIC_THINKING: provider.anthropicThinking,
       ...(sslVerify === undefined ? {} : { VISION_SSL_VERIFY: sslVerify }),
-      VISION_USER_AGENT: this.config.provider.userAgent,
+      VISION_USER_AGENT: provider.userAgent,
       LANG: this.config.language,
     }
+  }
+
+  /** Resolve one provider's credential into its environment, or undefined when unavailable. */
+  private async resolveProviderEnv(provider: ResolvedProvider): Promise<ResolvedProviderEnv | undefined> {
+    let resolved: ResolvedCredential | undefined
+    try {
+      resolved = isBuiltInFreeVisionProvider({
+        baseUrl: provider.baseUrl,
+        credential: provider.credential,
+        model: provider.model,
+        protocol: provider.protocol,
+        anthropicThinking: provider.anthropicThinking,
+        userAgent: provider.userAgent,
+      })
+        ? { value: BUILT_IN_FREE_VISION_KEY, source: 'built-in' }
+        : await this.ctx.credentials.resolve(provider.credential)
+    } catch {
+      resolved = undefined
+    }
+    if (resolved === undefined) return undefined
+    return { provider, env: this.providerEnv(provider, resolved) }
+  }
+
+  /** Resolve every enabled provider in priority order, skipping unreadable credentials. */
+  async resolveProviderPool(): Promise<ResolvedProviderEnv[]> {
+    const pool: ResolvedProviderEnv[] = []
+    for (const provider of this.config.providers) {
+      if (!provider.enabled) continue
+      const entry = await this.resolveProviderEnv(provider)
+      if (entry === undefined) {
+        this.ctx.logger.warn(
+          'dsh-vision-toolkit provider=%s credential=%s unavailable; skipped from the failover pool',
+          provider.name,
+          String(provider.credential),
+        )
+        continue
+      }
+      pool.push(entry)
+    }
+    return pool
+  }
+
+  /** Resolve the primary provider's credential at the remote-operation boundary. */
+  async resolveVisionEnv(): Promise<UpstreamEnvironment> {
+    const entry = await this.resolveProviderEnv(this.primaryProvider)
+    if (entry === undefined) {
+      throw new VisionToolkitError(
+        'config',
+        `credential ${String(this.primaryProvider.credential)} is not configured; set it through DSH credentials`,
+      )
+    }
+    return entry.env
   }
 
   private pathPolicy(workspace: string): Promise<PathPolicy> {
@@ -915,7 +985,7 @@ export class VisionToolkitRuntime {
     maxBytes: number,
     maxPixels: number,
     operation: OperationContext,
-  ): Promise<{ path: string; bytes: number; width: number; height: number; format: string } | undefined> {
+  ): Promise<{ path: string; bytes: number; width: number; height: number; format: string; hasAlpha: boolean } | undefined> {
     const candidate = join(root, name)
     let info
     try {
@@ -939,7 +1009,7 @@ export class VisionToolkitRuntime {
     }
     const digest = createHash('sha256').update(bytes).digest('hex')
     if (bytes.length !== info.size || !digest.startsWith(expectedOutDigestPrefix)) return undefined
-    let probed: { width: number; height: number; format: string } | undefined
+    let probed: { width: number; height: number; format: string; mode: string; hasAlpha: boolean } | undefined
     try {
       probed = await this.adapter.probeImageSize(real, { signal: operation.signal })
     } catch {
@@ -953,7 +1023,7 @@ export class VisionToolkitRuntime {
     ) {
       return undefined
     }
-    return { path: real, bytes: bytes.length, width: probed.width, height: probed.height, format: probed.format }
+    return { path: real, bytes: bytes.length, width: probed.width, height: probed.height, format: probed.format, hasAlpha: probed.hasAlpha }
   }
 
   private cacheEntryOutDigest(entry: string, prefix: string): string | undefined {
@@ -1016,6 +1086,8 @@ export class VisionToolkitRuntime {
     image: { path: string; bytes: number },
     policy: PathPolicy,
     operation: OperationContext,
+    maxBytes: number,
+    maxPixels: number,
   ): Promise<ImageInfo> {
     let bytes: Buffer
     try {
@@ -1029,7 +1101,7 @@ export class VisionToolkitRuntime {
     const digest = createHash('sha256').update(bytes).digest('hex').slice(0, COMPRESSED_IMAGE_CACHE_KEY_DIGEST_LENGTH)
     const root = await this.compressedImageRoot(policy)
     await this.pruneCompressedCache(root)
-    const prefix = `${COMPRESSED_IMAGE_CACHE_VERSION}-${digest}-b${this.config.maxImageBytes}-p${this.config.maxImagePixels}`
+    const prefix = `${COMPRESSED_IMAGE_CACHE_VERSION}-${digest}-b${maxBytes}-p${maxPixels}`
     for (const entry of await readdir(root)) {
       if (!entry.startsWith(`${prefix}-`) || entry.startsWith('.')) continue
       const outDigestPrefix = this.cacheEntryOutDigest(entry, prefix)
@@ -1037,14 +1109,7 @@ export class VisionToolkitRuntime {
         await rm(join(root, entry), { force: true }).catch(() => {})
         continue
       }
-      const cached = await this.readCacheCandidate(
-        root,
-        entry,
-        outDigestPrefix,
-        this.config.maxImageBytes,
-        this.config.maxImagePixels,
-        operation,
-      )
+      const cached = await this.readCacheCandidate(root, entry, outDigestPrefix, maxBytes, maxPixels, operation)
       if (cached !== undefined) {
         return { ...cached, originalPath: image.path }
       }
@@ -1053,13 +1118,7 @@ export class VisionToolkitRuntime {
     const staged = join(root, `.${prefix}-${randomUUID()}.partial`)
     let compressed: CompressedImageInfo
     try {
-      compressed = await this.adapter.compressImage(
-        image.path,
-        staged,
-        this.config.maxImageBytes,
-        this.config.maxImagePixels,
-        { signal: operation.signal },
-      )
+      compressed = await this.adapter.compressImage(image.path, staged, maxBytes, maxPixels, { signal: operation.signal })
     } catch (error) {
       await rm(staged, { force: true }).catch(() => {})
       throw error
@@ -1069,14 +1128,7 @@ export class VisionToolkitRuntime {
     const outDigest = createHash('sha256').update(stagedBytes).digest('hex').slice(0, COMPRESSED_IMAGE_CACHE_KEY_DIGEST_LENGTH)
     const finalName = `${prefix}-${outDigest}-${compressed.width}x${compressed.height}.${extension}`
     const finalPath = join(root, finalName)
-    const existing = await this.readCacheCandidate(
-      root,
-      finalName,
-      outDigest,
-      this.config.maxImageBytes,
-      this.config.maxImagePixels,
-      operation,
-    )
+    const existing = await this.readCacheCandidate(root, finalName, outDigest, maxBytes, maxPixels, operation)
     if (existing !== undefined) {
       await rm(staged, { force: true }).catch(() => {})
       return { ...existing, originalPath: image.path }
@@ -1095,10 +1147,12 @@ export class VisionToolkitRuntime {
       width: compressed.width,
       height: compressed.height,
       format: compressed.format,
+      hasAlpha: compressed.hasAlpha,
       originalPath: image.path,
     }
   }
 
+  /** Validate one image against the configured global limits (used by local tools). */
   private async validateImage(raw: string, policy: PathPolicy, operation: OperationContext): Promise<ImageInfo> {
     const image = await resolveInputFile(raw, policy)
     const decoded = await this.adapter.probeImageSize(image.path, { signal: operation.signal })
@@ -1112,9 +1166,9 @@ export class VisionToolkitRuntime {
       throw new VisionToolkitError('input', `image content is ${decoded.format}, but the filename uses ${extension}`)
     }
     if (image.bytes <= this.config.maxImageBytes && pixels <= this.config.maxImagePixels) {
-      return { ...image, width: decoded.width, height: decoded.height, format: decoded.format, originalPath: image.path }
+      return { ...image, width: decoded.width, height: decoded.height, format: decoded.format, hasAlpha: decoded.hasAlpha, originalPath: image.path }
     }
-    return this.autoCompressImage(image, policy, operation)
+    return this.autoCompressImage(image, policy, operation, this.config.maxImageBytes, this.config.maxImagePixels)
   }
 
   private accountImage(image: ImageInfo, operation: OperationContext): void {
@@ -1123,10 +1177,99 @@ export class VisionToolkitRuntime {
     operation.metrics.imagePixels += image.width * image.height
   }
 
+  /** Stable gate key for one provider's in-flight request cap. */
+  private providerGate(provider: ResolvedProvider): Semaphore {
+    const key = `${provider.baseUrl}\u0000${provider.model}\u0000${String(provider.credential)}`
+    let gate = this.providerGates.get(key)
+    if (gate === undefined) {
+      gate = new Semaphore(provider.concurrency)
+      this.providerGates.set(key, gate)
+    }
+    return gate
+  }
+
+  /**
+   * Prepare one image for an online vision request against the enabled
+   * provider pool. The raw image is kept when at least one enabled provider
+   * accepts it; otherwise it is compressed once to the first (highest
+   * priority) provider's limits so the priority route can proceed.
+   */
+  private async prepareVisionImage(
+    raw: string,
+    providers: readonly ResolvedProvider[],
+    policy: PathPolicy,
+    operation: OperationContext,
+  ): Promise<ImageInfo> {
+    const image = await resolveInputFile(raw, policy)
+    const decoded = await this.adapter.probeImageSize(image.path, { signal: operation.signal })
+    const pixels = decoded.width * decoded.height
+    if (!Number.isSafeInteger(pixels) || pixels < 1) {
+      throw new VisionToolkitError('input', `image dimensions are invalid: ${decoded.width}x${decoded.height}`)
+    }
+    const extension = extname(image.path).toLowerCase()
+    const expected = FORMAT_BY_EXTENSION.get(extension)
+    if (expected !== decoded.format) {
+      throw new VisionToolkitError('input', `image content is ${decoded.format}, but the filename uses ${extension}`)
+    }
+    const fits = providers.some(provider => image.bytes <= provider.maxImageBytes && pixels <= provider.maxImagePixels)
+    if (fits) {
+      return { ...image, width: decoded.width, height: decoded.height, format: decoded.format, hasAlpha: decoded.hasAlpha, originalPath: image.path }
+    }
+    const first = providers[0]
+    if (first === undefined) {
+      throw new VisionToolkitError('config', 'no enabled vision provider is available for this image')
+    }
+    return this.autoCompressImage(image, policy, operation, first.maxImageBytes, first.maxImagePixels)
+  }
+
+  /**
+   * Run one online-vision upstream command across the enabled provider pool in
+   * priority order. A provider is skipped when its size limits or concurrency
+   * are exhausted, retried up to its attempt count, and the next provider
+   * takes over on failure. Throws once every provider has failed.
+   */
+  private async runVisionWithFailover(
+    tool: 'glance' | 'ground' | 'detect' | 'long_screenshot_ocr',
+    args: readonly string[],
+    images: readonly ImageInfo[],
+    operation: OperationContext,
+    pool: readonly ResolvedProviderEnv[],
+  ): Promise<UpstreamRunResult> {
+    if (pool.length === 0) {
+      throw new VisionToolkitError('config', 'no enabled vision provider has a resolvable credential')
+    }
+    let lastError: unknown
+    let attempted = false
+    for (const { provider, env } of pool) {
+      const fits = images.every(image => image.bytes <= provider.maxImageBytes && image.width * image.height <= provider.maxImagePixels)
+      if (!fits) continue
+      const gate = this.providerGate(provider)
+      if (!gate.tryAcquire()) continue
+      attempted = true
+      try {
+        for (let attempt = 1; attempt <= provider.attempts; attempt++) {
+          try {
+            return await this.runUpstream(tool, args, operation, env)
+          } catch (error) {
+            lastError = error
+            if (operation.signal.aborted) throw error
+          }
+        }
+      } finally {
+        gate.release()
+      }
+    }
+    if (!attempted) {
+      throw new VisionToolkitError('capacity', `${tool}: no enabled vision provider accepts the image size or has a free concurrency slot`)
+    }
+    if (lastError instanceof VisionToolkitError) throw lastError
+    throw new VisionToolkitError('service', `${tool}: all vision providers failed`, { cause: lastError })
+  }
+
   private async glanceCacheKey(
     request: GlanceRequest,
     images: readonly ImageInfo[],
-    env: UpstreamEnvironment,
+    pool: readonly ResolvedProviderEnv[],
     signal: AbortSignal,
   ): Promise<string> {
     const imageFingerprints = await Promise.all(images.map(async (image) => {
@@ -1149,16 +1292,20 @@ export class VisionToolkitRuntime {
       query: request.query ?? null,
       ocr: request.ocr === true,
       region: request.region ?? null,
-      provider: {
+      language: this.config.language,
+      providers: pool.map(({ provider, env }) => ({
+        name: provider.name,
         baseUrl: env.VISION_BASE_URL,
         model: env.VISION_MODEL,
         protocol: env.VISION_API_PROTOCOL,
         anthropicThinking: env.VISION_ANTHROPIC_THINKING,
         sslVerify: env.VISION_SSL_VERIFY ?? null,
         userAgent: env.VISION_USER_AGENT,
-        language: env.LANG,
         credentialSha256: createHash('sha256').update(env.VISION_API_KEY).digest('hex'),
-      },
+        maxImageBytes: provider.maxImageBytes,
+        maxImagePixels: provider.maxImagePixels,
+        attempts: provider.attempts,
+      })),
     })
   }
 
@@ -1245,7 +1392,6 @@ export class VisionToolkitRuntime {
   private async glanceWithEnv(
     request: GlanceRequest,
     options: ToolCallOptions,
-    capturedEnv?: UpstreamEnvironment,
   ): Promise<GlanceResult> {
     return this.runOperation('vision_glance', options, async (operation) => {
       if (request.images.length === 0) throw new VisionToolkitError('input', 'glance requires at least one image')
@@ -1257,10 +1403,15 @@ export class VisionToolkitRuntime {
       }
       if (request.region !== undefined) parseRegion(request.region)
       const policy = await this.pathPolicy(options.workspace)
+      const pool = await this.resolveProviderPool()
+      if (pool.length === 0) {
+        throw new VisionToolkitError('config', 'no enabled vision provider has a resolvable credential')
+      }
+      const providers = pool.map(entry => entry.provider)
       const images: ImageInfo[] = []
       const seen = new Set<string>()
       for (const raw of request.images) {
-        const image = await this.validateImage(raw, policy, operation)
+        const image = await this.prepareVisionImage(raw, providers, policy, operation)
         if (seen.has(image.path)) {
           operation.metrics.cacheHits += 1
           continue
@@ -1269,10 +1420,9 @@ export class VisionToolkitRuntime {
         this.accountImage(image, operation)
         images.push(image)
       }
-      const env = capturedEnv ?? await this.resolveVisionEnv()
       const cacheKey = options.sessionScope === undefined
         ? undefined
-        : await this.glanceCacheKey(request, images, env, operation.signal)
+        : await this.glanceCacheKey(request, images, pool, operation.signal)
       if (options.sessionScope !== undefined && cacheKey !== undefined) {
         const cached = this.glanceCache.get(options.sessionScope)
         if (cached?.key === cacheKey) {
@@ -1280,12 +1430,12 @@ export class VisionToolkitRuntime {
           return cached.result
         }
       }
-      const result = await this.runUpstream('glance', [
+      const result = await this.runVisionWithFailover('glance', [
         ...images.map(image => image.path),
         ...(request.region !== undefined ? ['--region', request.region] : []),
         ...(request.ocr === true ? ['--ocr'] : []),
         ...(request.query !== undefined ? ['-q', request.query] : []),
-      ], operation, env)
+      ], images, operation, pool)
       const answer = result.stdout.trim()
       if (answer.length === 0) throw new VisionToolkitError('output', 'glance: vision API returned an empty description')
       const value: GlanceResult = {
@@ -1327,14 +1477,17 @@ export class VisionToolkitRuntime {
     if (request.target.trim().length === 0) throw new VisionToolkitError('input', 'target must not be empty')
     if (request.region !== undefined) parseRegion(request.region)
     const policy = await this.pathPolicy(options.workspace)
-    const image = await this.validateImage(request.image, policy, operation)
+    const pool = await this.resolveProviderPool()
+    if (pool.length === 0) {
+      throw new VisionToolkitError('config', 'no enabled vision provider has a resolvable credential')
+    }
+    const image = await this.prepareVisionImage(request.image, pool.map(entry => entry.provider), policy, operation)
     this.accountImage(image, operation)
-    const env = await this.resolveVisionEnv()
-    const result = await this.runUpstream(tool, [
+    const result = await this.runVisionWithFailover(tool, [
       image.path,
       request.target,
       ...(request.region !== undefined ? ['--region', request.region] : []),
-    ], operation, env)
+    ], [image], operation, pool)
     const elements = parseLocationOutput(result.stdout)
     this.validateLocations(elements, image.width, image.height)
     return { image, elements }
@@ -1665,7 +1818,13 @@ export class VisionToolkitRuntime {
         throw new VisionToolkitError('input', 'long_screenshot_ocr.prompt must not be empty when provided')
       }
       const policy = await this.pathPolicy(options.workspace)
-      const image = await this.validateImage(request.image, policy, operation)
+      const pool = splitOnly ? [] : await this.resolveProviderPool()
+      if (!splitOnly && pool.length === 0) {
+        throw new VisionToolkitError('config', 'no enabled vision provider has a resolvable credential')
+      }
+      const image = splitOnly
+        ? await this.validateImage(request.image, policy, operation)
+        : await this.prepareVisionImage(request.image, pool.map(entry => entry.provider), policy, operation)
       this.accountImage(image, operation)
       const stem = basename(image.originalPath, extname(image.originalPath))
       const finalDirectory = resolveOutputDirectory(request.runName, policy, `${stem}.long-ocr`)
@@ -1680,7 +1839,7 @@ export class VisionToolkitRuntime {
         const finalOutput = join(finalDirectory, basename(stagedOutput))
         const stagedChunks = join(stagedDirectory, 'chunks')
         const stagedManifest = join(stagedChunks, 'manifest.json')
-        const result = await this.runUpstream('long_screenshot_ocr', [
+        const ocrArgs = [
           image.path,
           '--mode',
           mode,
@@ -1699,7 +1858,10 @@ export class VisionToolkitRuntime {
           String(chunkTimeoutSeconds),
           ...(splitOnly ? ['--split-only'] : []),
           ...(request.resume === true ? ['--resume'] : []),
-        ], operation, splitOnly ? undefined : await this.resolveVisionEnv())
+        ]
+        const result = splitOnly
+          ? await this.runUpstream('long_screenshot_ocr', ocrArgs, operation)
+          : await this.runVisionWithFailover('long_screenshot_ocr', ocrArgs, [image], operation, pool)
         const reported = result.stdout.trim()
         const expectedReported = splitOnly ? stagedManifest : stagedOutput
         if (reported !== expectedReported) {
@@ -2148,7 +2310,7 @@ export class VisionToolkitRuntime {
               'glance',
               [VISION_MODEL_TEST_IMAGE, '-q', VISION_MODEL_TEST_PROMPT],
               operation,
-              this.visionEnv(resolvedCredential),
+              this.providerEnv(this.primaryProvider, resolvedCredential),
             )
             if (result.stdout.trim().length === 0) {
               throw new VisionToolkitError('output', 'glance: vision API returned an empty description')

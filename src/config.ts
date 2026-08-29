@@ -44,6 +44,34 @@ const BUILT_IN_FREE_VISION_MODEL_ALIASES = new Set([
   'moondream3.1-9B-A2B',
 ])
 
+/** One online vision provider in the failover pool. */
+export interface VisionProviderConfig {
+  /** Display label shown in Settings; defaults to the model name. */
+  name?: string
+  /** Whether this provider participates in the failover pool (default true). */
+  enabled?: boolean
+  /** Provider API base URL. */
+  baseUrl?: string
+  /** DSH Credential reference holding the API key (an environment-style name). */
+  credential?: string
+  /** Multimodal model name. */
+  model?: string
+  /** Vision request protocol: OpenAI Chat Completions or Anthropic Messages. */
+  protocol?: 'openai' | 'anthropic'
+  /** Anthropic thinking field behavior; `omit` leaves model defaults untouched. */
+  anthropicThinking?: 'omit' | 'disabled' | 'adaptive'
+  /** Outbound User-Agent for provider requests and connection tests. */
+  userAgent?: string
+  /** Per-provider maximum input image bytes; larger images skip to a later provider or are compressed. */
+  maxImageBytes?: number
+  /** Per-provider maximum decoded pixel count per input image. */
+  maxImagePixels?: number
+  /** Per-provider in-flight request cap; an exhausted provider is skipped in favor of the next one. */
+  concurrency?: number
+  /** Total attempts against this provider before failing over to the next one (default 3). */
+  attempts?: number
+}
+
 /** Full user-facing configuration; every field defaults at the schema boundary. */
 export interface VisionToolkitConfig {
   provider?: {
@@ -60,6 +88,8 @@ export interface VisionToolkitConfig {
     /** Outbound User-Agent for provider requests and connection tests. */
     userAgent?: string
   }
+  /** Ordered online vision providers; array order is the failover priority. */
+  providers?: VisionProviderConfig[]
   /** Vision output language (`zh` or `en`). */
   language?: 'zh' | 'en'
   /** Single remote/upstream call budget in milliseconds. */
@@ -122,6 +152,20 @@ export const Config: Schema<VisionToolkitConfig> = z.object({
     anthropicThinking: z.union(['omit', 'disabled', 'adaptive'] as const).default('omit'),
     userAgent: z.string().default(DEFAULT_VISION_USER_AGENT),
   }),
+  providers: z.array(z.object({
+    name: z.string(),
+    enabled: z.boolean().default(true),
+    baseUrl: z.string(),
+    credential: z.string(),
+    model: z.string(),
+    protocol: z.union(['openai', 'anthropic'] as const).default('openai'),
+    anthropicThinking: z.union(['omit', 'disabled', 'adaptive'] as const).default('omit'),
+    userAgent: z.string(),
+    maxImageBytes: z.number(),
+    maxImagePixels: z.number(),
+    concurrency: z.number(),
+    attempts: z.number(),
+  })).default([]),
   language: z.union(['zh', 'en'] as const).default('zh'),
   timeoutMs: z.number().default(30000),
   maxImageBytes: z.number().default(4194304),
@@ -141,6 +185,22 @@ export const Config: Schema<VisionToolkitConfig> = z.object({
   }),
 })
 
+/** One resolved online vision provider, with every default materialized. */
+export interface ResolvedProvider {
+  name: string
+  enabled: boolean
+  baseUrl: string
+  credential: CredentialRef
+  model: string
+  protocol: 'openai' | 'anthropic'
+  anthropicThinking: 'omit' | 'disabled' | 'adaptive'
+  userAgent: string
+  maxImageBytes: number
+  maxImagePixels: number
+  concurrency: number
+  attempts: number
+}
+
 /** Configuration after static validation, with every default materialized. */
 export interface ResolvedVisionToolkitConfig {
   provider: {
@@ -151,6 +211,8 @@ export interface ResolvedVisionToolkitConfig {
     anthropicThinking: 'omit' | 'disabled' | 'adaptive'
     userAgent: string
   }
+  /** Ordered failover pool; array order is the priority, highest first. */
+  providers: ResolvedProvider[]
   language: 'zh' | 'en'
   timeoutMs: number
   maxImageBytes: number
@@ -174,6 +236,122 @@ const MAX_TIMEOUT_MS = 600000
 const MAX_IMAGE_BYTES = 268435456
 const MAX_IMAGE_PIXELS = 268435456
 const MAX_CONCURRENCY = 16
+const MAX_PROVIDERS = 32
+const MAX_PROVIDER_ATTEMPTS = 100
+const DEFAULT_PROVIDER_ATTEMPTS = 3
+
+/** Global limits a provider inherits when it does not set its own. */
+interface ProviderDefaults {
+  maxImageBytes: number
+  maxImagePixels: number
+  concurrency: number
+}
+
+/** How strictly one provider's connection fields are validated. */
+type ProviderResolveMode = 'legacy' | 'enabled' | 'disabled'
+
+/**
+ * Resolve and validate one provider (a legacy `provider` entry or an element
+ * of `providers`). `enabled` rejects absent or blank connection fields;
+ * `legacy` fills absent fields with the built-in free-vision defaults but
+ * still rejects explicit blank values; `disabled` is fully lenient.
+ */
+function resolveProvider(
+  input: VisionProviderConfig,
+  defaults: ProviderDefaults,
+  label: string,
+  mode: ProviderResolveMode,
+): ResolvedProvider {
+  const baseUrlInput = input.baseUrl
+  const modelInput = input.model
+  const credentialInput = input.credential
+  const isBlank = (value: string | undefined): boolean => value === undefined || value.trim() === ''
+
+  let baseUrl: string
+  if (mode === 'enabled') {
+    if (isBlank(baseUrlInput)) throw new VisionToolkitError('config', `${label}.baseUrl must not be empty`)
+    baseUrl = baseUrlInput!.trim().replace(/\/+$/, '')
+  } else if (mode === 'legacy') {
+    baseUrl = baseUrlInput === undefined ? BUILT_IN_FREE_VISION_BASE_URL : baseUrlInput.trim().replace(/\/+$/, '')
+  } else {
+    baseUrl = isBlank(baseUrlInput) ? BUILT_IN_FREE_VISION_BASE_URL : baseUrlInput!.trim().replace(/\/+$/, '')
+  }
+  if (!/^https?:\/\//i.test(baseUrl) || baseUrl.length <= 'https://'.length) {
+    throw new VisionToolkitError('config', `${label}.baseUrl must be an http(s) URL`)
+  }
+
+  let model: string
+  if (mode === 'enabled') {
+    if (isBlank(modelInput)) throw new VisionToolkitError('config', `${label}.model must not be empty`)
+    model = modelInput!.trim()
+  } else if (mode === 'legacy') {
+    model = modelInput === undefined ? BUILT_IN_FREE_VISION_MODEL : modelInput.trim()
+    if (model.length === 0) {
+      throw new VisionToolkitError('config', `${label}.model must not be empty`)
+    }
+  } else {
+    model = isBlank(modelInput) ? BUILT_IN_FREE_VISION_MODEL : modelInput!.trim()
+  }
+
+  let credentialSource: string
+  if (mode === 'enabled') {
+    if (isBlank(credentialInput)) throw new VisionToolkitError('config', `${label}.credential must not be empty`)
+    credentialSource = credentialInput!.trim()
+  } else if (mode === 'legacy') {
+    credentialSource = credentialInput === undefined ? BUILT_IN_FREE_VISION_CREDENTIAL : credentialInput.trim()
+  } else {
+    credentialSource = isBlank(credentialInput) ? BUILT_IN_FREE_VISION_CREDENTIAL : credentialInput!.trim()
+  }
+  let credential: CredentialRef
+  try {
+    credential = credentialRef(credentialSource)
+  } catch (error) {
+    throw new VisionToolkitError('config', `${label}.credential "${credentialSource}" is not a valid credential reference`, { cause: error })
+  }
+  const protocol = input.protocol ?? 'openai'
+  if (protocol !== 'openai' && protocol !== 'anthropic') {
+    throw new VisionToolkitError('config', `${label}.protocol must be "openai" or "anthropic"`)
+  }
+  const anthropicThinking = input.anthropicThinking ?? 'omit'
+  if (anthropicThinking !== 'omit' && anthropicThinking !== 'disabled' && anthropicThinking !== 'adaptive') {
+    throw new VisionToolkitError('config', `${label}.anthropicThinking must be "omit", "disabled", or "adaptive"`)
+  }
+  const userAgent = (input.userAgent ?? DEFAULT_VISION_USER_AGENT).trim()
+  if (userAgent.length === 0) {
+    throw new VisionToolkitError('config', `${label}.userAgent must not be empty`)
+  }
+  const maxImageBytes = input.maxImageBytes ?? defaults.maxImageBytes
+  if (!Number.isInteger(maxImageBytes) || maxImageBytes < 1024 || maxImageBytes > MAX_IMAGE_BYTES) {
+    throw new VisionToolkitError('config', `${label}.maxImageBytes must be an integer between 1024 and ${MAX_IMAGE_BYTES}`)
+  }
+  const maxImagePixels = input.maxImagePixels ?? defaults.maxImagePixels
+  if (!Number.isInteger(maxImagePixels) || maxImagePixels < 1 || maxImagePixels > MAX_IMAGE_PIXELS) {
+    throw new VisionToolkitError('config', `${label}.maxImagePixels must be an integer between 1 and ${MAX_IMAGE_PIXELS}`)
+  }
+  const concurrency = input.concurrency ?? defaults.concurrency
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > MAX_CONCURRENCY) {
+    throw new VisionToolkitError('config', `${label}.concurrency must be an integer between 1 and ${MAX_CONCURRENCY}`)
+  }
+  const attempts = input.attempts ?? DEFAULT_PROVIDER_ATTEMPTS
+  if (!Number.isInteger(attempts) || attempts < 1 || attempts > MAX_PROVIDER_ATTEMPTS) {
+    throw new VisionToolkitError('config', `${label}.attempts must be an integer between 1 and ${MAX_PROVIDER_ATTEMPTS}`)
+  }
+  const name = (input.name ?? '').trim()
+  return {
+    name: name.length === 0 ? model : name,
+    enabled: input.enabled !== false,
+    baseUrl,
+    credential,
+    model,
+    protocol,
+    anthropicThinking,
+    userAgent,
+    maxImageBytes,
+    maxImagePixels,
+    concurrency,
+    attempts,
+  }
+}
 
 /**
  * Validate and normalize a config object (partial inputs receive the same
@@ -184,38 +362,7 @@ const MAX_CONCURRENCY = 16
  * @returns the fully defaulted, validated configuration.
  */
 export function resolveConfig(config: VisionToolkitConfig = {}): ResolvedVisionToolkitConfig {
-  const provider = config.provider ?? {}
   const runtime = config.runtime ?? {}
-  const baseUrl = (provider.baseUrl ?? BUILT_IN_FREE_VISION_BASE_URL).trim().replace(/\/+$/, '')
-  if (!/^https?:\/\//i.test(baseUrl) || baseUrl.length <= 'https://'.length) {
-    throw new VisionToolkitError('config', 'provider.baseUrl must be an http(s) URL')
-  }
-  let credential: CredentialRef
-  try {
-    credential = credentialRef((provider.credential ?? BUILT_IN_FREE_VISION_CREDENTIAL).trim())
-  } catch (error) {
-    throw new VisionToolkitError(
-      'config',
-      `provider.credential "${provider.credential ?? BUILT_IN_FREE_VISION_CREDENTIAL}" is not a valid credential reference`,
-      { cause: error },
-    )
-  }
-  const model = (provider.model ?? BUILT_IN_FREE_VISION_MODEL).trim()
-  if (model.length === 0) {
-    throw new VisionToolkitError('config', 'provider.model must not be empty')
-  }
-  const protocol = provider.protocol ?? 'openai'
-  if (protocol !== 'openai' && protocol !== 'anthropic') {
-    throw new VisionToolkitError('config', 'provider.protocol must be "openai" or "anthropic"')
-  }
-  const anthropicThinking = provider.anthropicThinking ?? 'omit'
-  if (anthropicThinking !== 'omit' && anthropicThinking !== 'disabled' && anthropicThinking !== 'adaptive') {
-    throw new VisionToolkitError('config', 'provider.anthropicThinking must be "omit", "disabled", or "adaptive"')
-  }
-  const userAgent = (provider.userAgent ?? DEFAULT_VISION_USER_AGENT).trim()
-  if (userAgent.length === 0) {
-    throw new VisionToolkitError('config', 'provider.userAgent must not be empty')
-  }
   const language = config.language ?? 'zh'
   if (language !== 'zh' && language !== 'en') {
     throw new VisionToolkitError('config', 'language must be "zh" or "en"')
@@ -259,8 +406,26 @@ export function resolveConfig(config: VisionToolkitConfig = {}): ResolvedVisionT
   const variantProviders = (imageInputVariants.providers ?? [])
     .map(provider => provider.trim())
     .filter(provider => provider.length > 0)
+  const providerDefaults: ProviderDefaults = { maxImageBytes, maxImagePixels, concurrency }
+  const configuredProviders = config.providers ?? []
+  if (configuredProviders.length > MAX_PROVIDERS) {
+    throw new VisionToolkitError('config', `providers must have at most ${MAX_PROVIDERS} entries`)
+  }
+  const providers: ResolvedProvider[] = configuredProviders.length > 0
+    ? configuredProviders.map((entry, index) =>
+      resolveProvider(entry, providerDefaults, `providers[${index}]`, entry.enabled !== false ? 'enabled' : 'disabled'))
+    : [resolveProvider(config.provider ?? {}, providerDefaults, 'provider', 'legacy')]
+  const primary = providers.find(entry => entry.enabled) ?? providers[0]!
   return {
-    provider: { baseUrl, credential, model, protocol, anthropicThinking, userAgent },
+    provider: {
+      baseUrl: primary.baseUrl,
+      credential: primary.credential,
+      model: primary.model,
+      protocol: primary.protocol,
+      anthropicThinking: primary.anthropicThinking,
+      userAgent: primary.userAgent,
+    },
+    providers,
     language,
     timeoutMs,
     maxImageBytes,
