@@ -343,7 +343,7 @@ describe('Vision Toolkit client plugin', () => {
     expect(root?.querySelector('.dvt-essential')).toBe(essential)
     expect(root?.lastElementChild).toBe(footer)
     expect(advanced).not.toBeNull()
-    expect(essential?.contains(screen.getByLabelText('credential'))).toBe(true)
+    expect(essential?.contains(screen.getByLabelText('apiKey'))).toBe(true)
     expect(view.container.querySelector('.dvt-settings-header')).toBeNull()
   })
 
@@ -393,7 +393,7 @@ describe('Vision Toolkit client plugin', () => {
     })
   })
 
-  it('links the AIHubMix tutorial and exposes a copyable manual update command', async () => {
+  it('exposes a copyable manual update command', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ ok: true, value: settingsSnapshot() })))
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
@@ -407,36 +407,12 @@ describe('Vision Toolkit client plugin', () => {
       t: (key: string) => key,
     }))
 
-    const aihubmixTutorial = await screen.findByRole('link', { name: 'aihubmixTutorial' })
-    expect(aihubmixTutorial.getAttribute('href')).toBe('https://github.com/Anionex/dsh-vision-toolkit/blob/main/docs/aihubmix-gemini-vision.zh.md')
-    expect(aihubmixTutorial.getAttribute('target')).toBe('_blank')
-    expect(screen.queryByRole('link', { name: 'groqTutorial' })).toBeNull()
-
     const command = 'dsh plugin --profile web add @mengruo/dsh-vision-toolkit@latest --registry=https://registry.npmjs.org/'
-    const code = screen.getByText(command)
+    const code = await screen.findByText(command)
     expect(code.tagName).toBe('CODE')
     fireEvent.click(screen.getByRole('button', { name: 'copy' }))
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(command))
     await screen.findByRole('button', { name: 'copied' })
-  })
-
-  it('selects the English AIHubMix tutorial for English output', async () => {
-    const snapshot = settingsSnapshot()
-    snapshot.settings.value.language = 'en'
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ ok: true, value: snapshot })))
-
-    const { ctx, registrations } = fakeClientContext()
-    apply(ctx as never)
-    const settings = registrations.find(entry => entry.options.name === 'settings.section')
-    if (settings === undefined) throw new Error('Settings component was not registered')
-    render(createElement(settings.component, {
-      controller: new VisionSettingsController(),
-      t: (key: string) => key,
-    }))
-
-    const aihubmixTutorial = await screen.findByRole('link', { name: 'aihubmixTutorial' })
-    expect(aihubmixTutorial.getAttribute('href')).toBe('https://github.com/Anionex/dsh-vision-toolkit/blob/main/docs/aihubmix-gemini-vision.md')
-    expect(screen.queryByRole('link', { name: 'groqTutorial' })).toBeNull()
   })
 
   it('reports a successful install and asks for a manual restart when self-restart is unavailable', async () => {
@@ -531,7 +507,7 @@ describe('Vision Toolkit client plugin', () => {
     expect((await readDisplayConfig()).hidden).toBe(true)
     expect(displayConfig).toHaveBeenCalledTimes(1)
 
-    const saved = await controller.save(settingsSnapshot().settings.value, 1, undefined, true)
+    const saved = await controller.save(settingsSnapshot().settings.value, 1, [], true)
 
     expect(saved).toBe(true)
     expect((await readDisplayConfig()).hidden).toBe(true)
@@ -559,7 +535,7 @@ describe('Vision Toolkit client plugin', () => {
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(displayRequests).toBe(1)
 
-    const saved = await controller.save(settingsSnapshot().settings.value, 1, undefined, true)
+    const saved = await controller.save(settingsSnapshot().settings.value, 1, [], true)
     expect(saved).toBe(true)
 
     resolveFirstDisplay?.(jsonResponse({ ok: true, value: { hidden: false } }))
@@ -567,7 +543,7 @@ describe('Vision Toolkit client plugin', () => {
     expect(displayRequests).toBe(2)
   })
 
-  it('unlocks API key input when the built-in provider changes to a custom endpoint', async () => {
+  it('disables the API key input for the built-in free provider and enables it for custom providers', async () => {
     const initial = settingsSnapshot()
     initial.settings.value.provider = {
       baseUrl: 'https://vision.anionex.me/v1',
@@ -580,6 +556,9 @@ describe('Vision Toolkit client plugin', () => {
     initial.credential = {
       ref: 'ANIONEX_FREE_VISION', configured: true, source: 'built-in-free', writable: false,
     }
+    initial.credentials = [
+      { ref: 'ANIONEX_FREE_VISION', configured: true, source: 'built-in-free', writable: false },
+    ]
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(jsonResponse({ ok: true, value: initial })))
 
     const { ctx, registrations } = fakeClientContext()
@@ -593,8 +572,11 @@ describe('Vision Toolkit client plugin', () => {
 
     const keyInput = await screen.findByLabelText('apiKey') as HTMLInputElement
     expect(keyInput.disabled).toBe(true)
-    fireEvent.change(screen.getByLabelText('baseUrl'), { target: { value: 'https://custom.example/v1' } })
-    expect(keyInput.disabled).toBe(false)
+    // A newly added custom provider owns an auto-generated credential, so its key input is enabled.
+    fireEvent.click(screen.getByRole('button', { name: 'addProvider' }))
+    const select = screen.getByLabelText('providers') as HTMLSelectElement
+    fireEvent.change(select, { target: { value: '1' } })
+    expect((await screen.findByLabelText('apiKey') as HTMLInputElement).disabled).toBe(false)
   })
 
   it('labels the lightweight API probe separately from the real multimodal model test', async () => {
@@ -626,16 +608,16 @@ describe('Vision Toolkit client plugin', () => {
     expect(screen.getByRole('button', { name: 'testConnection' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'testModel' }))
     await screen.findByText('healthModelReady')
-    expect(screen.getByText('modelTestVerifiedTag')).toBeTruthy()
     const request = fetchMock.mock.calls[1]?.[1] as RequestInit
     expect(JSON.parse(String(request.body))).toEqual({
       action: 'health',
       testConnection: true,
       testModel: true,
+      providerIndex: 0,
     })
   })
 
-  it('does not show the verified tag after only the API connection test passes', async () => {
+  it('shows the model as not tested when only the API connection test runs', async () => {
     const health = {
       pluginVersion: '0.1.0',
       checks: {
@@ -662,8 +644,6 @@ describe('Vision Toolkit client plugin', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'testConnection' }))
     await screen.findByText('healthModelNotTested')
-    expect(screen.getByText('modelTestNotRunTag')).toBeTruthy()
-    expect(screen.queryByText('modelTestVerifiedTag')).toBeNull()
   })
 
   it('saves Settings first, then stores the typed API key without sending it in Settings', async () => {

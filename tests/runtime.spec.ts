@@ -779,7 +779,7 @@ describe('VisionToolkitRuntime', () => {
     }
   })
 
-  it('checks output readiness without resolving session-relative allowed directories', async () => {
+  it('runs the simplified health check without touching session-relative allowed directories', async () => {
     const runtimeHome = await tempWorkspace()
     const { runtime } = await setup(
       { allowedDirs: ['session-relative-inputs'] },
@@ -789,10 +789,11 @@ describe('VisionToolkitRuntime', () => {
 
     const result = await runtime.health(false, { signal, workspace: runtimeHome })
 
-    expect(result.checks.artifactDirectory).toEqual({
-      status: 'ok',
-      detail: `Artifact directory is writable: ${join(await realpath(runtimeHome), '.dsh-vision-toolkit', 'artifacts')}`,
-    })
+    expect(result.checks.python).toEqual(expect.objectContaining({ status: 'ok' }))
+    expect(result.checks.dependencies).toEqual(expect.objectContaining({ status: 'ok' }))
+    expect(result.checks.chrome).toBeDefined()
+    expect(result.checks.service.status).toBe('not_tested')
+    expect(result.checks.model.status).toBe('not_tested')
   })
 
   it('reports a real multimodal model-test failure without treating /models as success', async () => {

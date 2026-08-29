@@ -46,6 +46,8 @@ const BUILT_IN_FREE_VISION_MODEL_ALIASES = new Set([
 
 /** One online vision provider in the failover pool. */
 export interface VisionProviderConfig {
+  /** Stable unique id used to derive the auto-generated credential name. */
+  id?: string
   /** Display label shown in Settings; defaults to the model name. */
   name?: string
   /** Whether this provider participates in the failover pool (default true). */
@@ -62,6 +64,8 @@ export interface VisionProviderConfig {
   anthropicThinking?: 'omit' | 'disabled' | 'adaptive'
   /** Outbound User-Agent for provider requests and connection tests. */
   userAgent?: string
+  /** Per-provider single request timeout in milliseconds. */
+  timeoutMs?: number
   /** Per-provider maximum input image bytes; larger images skip to a later provider or are compressed. */
   maxImageBytes?: number
   /** Per-provider maximum decoded pixel count per input image. */
@@ -155,12 +159,14 @@ export const Config: Schema<VisionToolkitConfig> = z.object({
   providers: z.array(z.object({
     name: z.string(),
     enabled: z.boolean().default(true),
+    id: z.string(),
     baseUrl: z.string(),
     credential: z.string(),
     model: z.string(),
     protocol: z.union(['openai', 'anthropic'] as const).default('openai'),
     anthropicThinking: z.union(['omit', 'disabled', 'adaptive'] as const).default('omit'),
     userAgent: z.string(),
+    timeoutMs: z.number(),
     maxImageBytes: z.number(),
     maxImagePixels: z.number(),
     concurrency: z.number(),
@@ -187,6 +193,8 @@ export const Config: Schema<VisionToolkitConfig> = z.object({
 
 /** One resolved online vision provider, with every default materialized. */
 export interface ResolvedProvider {
+  /** Stable unique id used to derive the auto-generated credential name. */
+  id?: string
   name: string
   enabled: boolean
   baseUrl: string
@@ -195,6 +203,7 @@ export interface ResolvedProvider {
   protocol: 'openai' | 'anthropic'
   anthropicThinking: 'omit' | 'disabled' | 'adaptive'
   userAgent: string
+  timeoutMs: number
   maxImageBytes: number
   maxImagePixels: number
   concurrency: number
@@ -242,6 +251,7 @@ const DEFAULT_PROVIDER_ATTEMPTS = 3
 
 /** Global limits a provider inherits when it does not set its own. */
 interface ProviderDefaults {
+  timeoutMs: number
   maxImageBytes: number
   maxImagePixels: number
   concurrency: number
@@ -320,6 +330,10 @@ function resolveProvider(
   if (userAgent.length === 0) {
     throw new VisionToolkitError('config', `${label}.userAgent must not be empty`)
   }
+  const timeoutMs = input.timeoutMs ?? defaults.timeoutMs
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > MAX_TIMEOUT_MS) {
+    throw new VisionToolkitError('config', `${label}.timeoutMs must be an integer between 1000 and ${MAX_TIMEOUT_MS}`)
+  }
   const maxImageBytes = input.maxImageBytes ?? defaults.maxImageBytes
   if (!Number.isInteger(maxImageBytes) || maxImageBytes < 1024 || maxImageBytes > MAX_IMAGE_BYTES) {
     throw new VisionToolkitError('config', `${label}.maxImageBytes must be an integer between 1024 and ${MAX_IMAGE_BYTES}`)
@@ -337,7 +351,9 @@ function resolveProvider(
     throw new VisionToolkitError('config', `${label}.attempts must be an integer between 1 and ${MAX_PROVIDER_ATTEMPTS}`)
   }
   const name = (input.name ?? '').trim()
+  const id = (input.id ?? '').trim()
   return {
+    ...(id.length === 0 ? {} : { id }),
     name: name.length === 0 ? model : name,
     enabled: input.enabled !== false,
     baseUrl,
@@ -346,6 +362,7 @@ function resolveProvider(
     protocol,
     anthropicThinking,
     userAgent,
+    timeoutMs,
     maxImageBytes,
     maxImagePixels,
     concurrency,
@@ -406,7 +423,7 @@ export function resolveConfig(config: VisionToolkitConfig = {}): ResolvedVisionT
   const variantProviders = (imageInputVariants.providers ?? [])
     .map(provider => provider.trim())
     .filter(provider => provider.length > 0)
-  const providerDefaults: ProviderDefaults = { maxImageBytes, maxImagePixels, concurrency }
+  const providerDefaults: ProviderDefaults = { timeoutMs, maxImageBytes, maxImagePixels, concurrency }
   const configuredProviders = config.providers ?? []
   if (configuredProviders.length > MAX_PROVIDERS) {
     throw new VisionToolkitError('config', `providers must have at most ${MAX_PROVIDERS} entries`)

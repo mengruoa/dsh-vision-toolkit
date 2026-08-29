@@ -32,6 +32,13 @@ export interface VisionToolkitSettingsSnapshot {
         source?: string;
         writable: boolean;
     };
+    /** Per-provider credential states, aligned with `settings.value.providers` order. */
+    credentials: Array<{
+        ref: string;
+        configured: boolean;
+        source?: string;
+        writable: boolean;
+    }>;
     runtime: RuntimeManagerStatus;
     release: {
         pluginVersion: string;
@@ -75,6 +82,7 @@ export declare class VisionToolkitWebBackend {
     snapshot(): Promise<VisionToolkitSettingsSnapshot>;
     private save;
     private saveCredential;
+    private deleteCredential;
     private health;
     /** Handle the exact Settings route. */
     handle(req: IncomingMessage, res: ServerResponse): Promise<void>;

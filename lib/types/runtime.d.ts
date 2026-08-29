@@ -309,7 +309,7 @@ export interface HealthCheck {
     status: 'ok' | 'warning' | 'error' | 'not_tested';
     detail: string;
 }
-/** Runtime, dependency, storage, credential, and optional service health. */
+/** Runtime, dependency, browser, and optional per-provider service health. */
 export interface VisionToolkitHealthResult {
     pluginVersion: string;
     upstream: UpstreamVersionInfo;
@@ -317,15 +317,14 @@ export interface VisionToolkitHealthResult {
         python: HealthCheck;
         dependencies: HealthCheck;
         chrome: HealthCheck;
-        credential: HealthCheck;
-        artifactDirectory: HealthCheck;
-        tempDirectory: HealthCheck;
         service: HealthCheck;
         model: HealthCheck;
     };
     healthy: boolean;
     connectionTested: boolean;
     modelTested: boolean;
+    /** Provider label when the service/model checks targeted one specific provider. */
+    providerName?: string;
 }
 /** Shared per-call execution options. */
 export interface ToolCallOptions {
@@ -370,6 +369,8 @@ export declare class VisionToolkitRuntime {
     /** Capture the credential and provider identity used by one evidence conversion. */
     captureEvidenceRuntime(): Promise<CapturedEvidenceRuntime>;
     private timeout;
+    /** Overall operation budget: the slowest enabled provider's timeout, else the global default. */
+    private operationTimeoutMs;
     private operationError;
     private semaphore;
     private runOperation;
@@ -435,9 +436,8 @@ export declare class VisionToolkitRuntime {
     dominantColors(request: DominantColorsRequest, options: ToolCallOptions): Promise<DominantColorsResult>;
     /** html_screenshot: render only a path-fenced local HTML file in the pinned Chrome adapter. */
     htmlScreenshot(request: HtmlScreenshotRequest, options: ToolCallOptions): Promise<HtmlScreenshotResult>;
-    private writableDirectoryCheck;
-    /** Health: inspect local readiness, optionally probe `/models`, and explicitly test one real multimodal request. */
-    health(testConnection: boolean, options: ToolCallOptions, testModel?: boolean): Promise<VisionToolkitHealthResult>;
+    /** Health: inspect local readiness, and optionally probe one provider's `/models` plus one real multimodal request. */
+    health(testConnection: boolean, options: ToolCallOptions, testModel?: boolean, provider?: ResolvedProvider): Promise<VisionToolkitHealthResult>;
     /** Report the packaged upstream snapshot version. */
     checkoutVersion(): Promise<string>;
     /** Prepared Python command. */

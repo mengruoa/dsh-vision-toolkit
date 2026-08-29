@@ -20,7 +20,11 @@ declare const en: {
     readonly moveUp: "Move up";
     readonly moveDown: "Move down";
     readonly removeProvider: "Remove";
-    readonly primaryKeyHint: "The API key field above stores the key for the first provider; additional providers use their own credential names.";
+    readonly prioritySort: "Provider priority";
+    readonly prioritySortHint: "Order the providers by failover priority. The top one is tried first; request order here is the priority order.";
+    readonly runtimeCheck: "Runtime check";
+    readonly runtimeCheckHint: "Checks the local Python environment (with its libraries) and the browser used for HTML screenshots.";
+    readonly apiKeyBuiltInFree: "The built-in free provider needs no user key.";
     readonly aihubmixTutorial: "Need an AIHubMix key for free Gemini 3.7 Flash vision? Follow the signup guide →";
     readonly baseUrl: "Base URL";
     readonly apiKey: "API key";
@@ -234,6 +238,7 @@ interface HealthResult {
     modelTested: boolean;
 }
 interface ProviderValue {
+    id?: string;
     name?: string;
     enabled?: boolean;
     baseUrl?: string;
@@ -242,6 +247,7 @@ interface ProviderValue {
     protocol?: 'openai' | 'anthropic';
     anthropicThinking?: 'omit' | 'disabled' | 'adaptive';
     userAgent?: string;
+    timeoutMs?: number;
     maxImageBytes?: number;
     maxImagePixels?: number;
     concurrency?: number;
@@ -318,6 +324,12 @@ interface SettingsSnapshot {
         source?: string;
         writable: boolean;
     };
+    credentials: Array<{
+        ref: string;
+        configured: boolean;
+        source?: string;
+        writable: boolean;
+    }>;
     runtime: {
         ready: boolean;
         generation: number;
@@ -346,6 +358,7 @@ interface SettingsState {
     status: 'idle' | 'loading' | 'ready' | 'error';
     snapshot?: SettingsSnapshot | undefined;
     health?: HealthResult | undefined;
+    providerHealth?: Record<number, HealthResult> | undefined;
     update?: PluginUpdateCheck | undefined;
     restart?: PluginUpdateResult | undefined;
     action?: 'save' | 'health' | 'connection' | 'model' | 'check-update' | 'apply-update' | undefined;
@@ -362,8 +375,11 @@ export declare class VisionSettingsController {
     private set;
     load(): Promise<void>;
     refreshIfLoaded(): void;
-    save(value: SettingsValue, expectedRevision: number, credentialValue: string | undefined, writeSettings: boolean): Promise<boolean>;
-    runHealth(mode: 'health' | 'connection' | 'model'): Promise<void>;
+    save(value: SettingsValue, expectedRevision: number, credentials: Array<{
+        ref: string;
+        value: string;
+    }>, writeSettings: boolean): Promise<boolean>;
+    runHealth(mode: 'health' | 'connection' | 'model', providerIndex?: number): Promise<void>;
     checkUpdate(): Promise<void>;
     applyUpdate(expectedVersion: string): Promise<void>;
     reportRestartTimeout(message: string): void;

@@ -463,7 +463,7 @@ export interface HealthCheck {
   detail: string
 }
 
-/** Runtime, dependency, storage, credential, and optional service health. */
+/** Runtime, dependency, browser, and optional per-provider service health. */
 export interface VisionToolkitHealthResult {
   pluginVersion: string
   upstream: UpstreamVersionInfo
@@ -471,15 +471,14 @@ export interface VisionToolkitHealthResult {
     python: HealthCheck
     dependencies: HealthCheck
     chrome: HealthCheck
-    credential: HealthCheck
-    artifactDirectory: HealthCheck
-    tempDirectory: HealthCheck
     service: HealthCheck
     model: HealthCheck
   }
   healthy: boolean
   connectionTested: boolean
   modelTested: boolean
+  /** Provider label when the service/model checks targeted one specific provider. */
+  providerName?: string
 }
 
 /** Shared per-call execution options. */
@@ -751,11 +750,17 @@ export class VisionToolkitRuntime {
   }
 
   private timeout(options: ToolCallOptions): number {
-    const value = options.timeoutMs ?? this.config.timeoutMs
+    const value = options.timeoutMs ?? this.operationTimeoutMs()
     if (!Number.isInteger(value) || value < 1000 || value > MAX_TIMEOUT_MS) {
       throw new VisionToolkitError('input', `timeoutMs must be an integer between 1000 and ${MAX_TIMEOUT_MS}`)
     }
     return value
+  }
+
+  /** Overall operation budget: the slowest enabled provider's timeout, else the global default. */
+  private operationTimeoutMs(): number {
+    const providers = this.config.providers.filter(provider => provider.enabled)
+    return providers.length === 0 ? this.config.timeoutMs : Math.max(...providers.map(provider => provider.timeoutMs))
   }
 
   private operationError(
@@ -1248,11 +1253,19 @@ export class VisionToolkitRuntime {
       attempted = true
       try {
         for (let attempt = 1; attempt <= provider.attempts; attempt++) {
+          const attemptDeadline = createDeadline(operation.signal, provider.timeoutMs)
           try {
-            return await this.runUpstream(tool, args, operation, env)
+            return await this.runUpstream(tool, args, { signal: attemptDeadline.signal, metrics: operation.metrics }, env)
           } catch (error) {
-            lastError = error
             if (operation.signal.aborted) throw error
+            const classified = error instanceof VisionToolkitError
+              ? error
+              : new VisionToolkitError('service', `${tool}: request failed`, { cause: error })
+            lastError = attemptDeadline.timedOut && classified.code === 'cancelled'
+              ? new VisionToolkitError('timeout', `${tool}: ${provider.name} request timed out after ${provider.timeoutMs}ms`, { cause: classified })
+              : classified
+          } finally {
+            attemptDeadline.cleanup()
           }
         }
       } finally {
@@ -2192,20 +2205,8 @@ export class VisionToolkitRuntime {
     })
   }
 
-  private async writableDirectoryCheck(path: string, label: string): Promise<HealthCheck> {
-    const probe = join(path, `.vision-toolkit-health-${randomUUID()}`)
-    try {
-      await writeFile(probe, 'ok\n', { encoding: 'utf8', flag: 'wx' })
-      await rm(probe, { force: true })
-      return { status: 'ok', detail: `${label} is writable: ${path}` }
-    } catch {
-      await rm(probe, { force: true }).catch(() => {})
-      return { status: 'error', detail: `${label} is not writable: ${path}` }
-    }
-  }
-
-  /** Health: inspect local readiness, optionally probe `/models`, and explicitly test one real multimodal request. */
-  async health(testConnection: boolean, options: ToolCallOptions, testModel = false): Promise<VisionToolkitHealthResult> {
+  /** Health: inspect local readiness, and optionally probe one provider's `/models` plus one real multimodal request. */
+  async health(testConnection: boolean, options: ToolCallOptions, testModel = false, provider?: ResolvedProvider): Promise<VisionToolkitHealthResult> {
     return this.runOperation('vision_toolkit_health', options, async (operation) => {
       const info = this.upstreamVersion
       const python: HealthCheck = { status: 'ok', detail: `${info.pythonVersion} via ${info.python}` }
@@ -2225,108 +2226,97 @@ export class VisionToolkitRuntime {
         if (operation.signal.aborted) throw new VisionToolkitError('cancelled', 'vision_toolkit_health: cancelled')
         chrome = { status: 'error', detail: 'Chrome availability probe failed' }
       }
-      let resolvedCredential: ResolvedCredential | undefined
-      let credential: HealthCheck
-      try {
-        resolvedCredential = isBuiltInFreeVisionProvider(this.config.provider)
-          ? { value: BUILT_IN_FREE_VISION_KEY, source: 'built-in' }
-          : await this.ctx.credentials.resolve(this.config.provider.credential)
-        credential = resolvedCredential === undefined
-          ? { status: 'error', detail: `credential ${this.config.provider.credential} is not configured` }
-          : { status: 'ok', detail: `credential ${this.config.provider.credential} is resolvable` }
-      } catch {
-        credential = { status: 'error', detail: `credential ${this.config.provider.credential} could not be resolved` }
-      }
-      let artifactDirectory: HealthCheck
-      try {
-        // allowedDirs are session input roots; they do not affect output readiness.
-        const policy = await createPathPolicy(options.workspace, [])
-        artifactDirectory = await this.writableDirectoryCheck(policy.outputDir, 'Artifact directory')
-      } catch {
-        artifactDirectory = { status: 'error', detail: 'Artifact directory could not be prepared' }
-      }
-      const tempDirectory = await this.writableDirectoryCheck(info.runtimeHome, 'Runtime temp directory')
       let service: HealthCheck = {
         status: 'not_tested',
-        detail: 'Connection was not tested; pass testConnection=true to query the configured /models endpoint',
+        detail: 'Connection was not tested; use the per-provider API test',
       }
       let model: HealthCheck = {
         status: 'not_tested',
-        detail: 'Vision model was not tested; run an explicit model test to send the bundled diagnostic image',
+        detail: 'Vision model was not tested; use the per-provider model test',
       }
-      if (testConnection) {
-        if (resolvedCredential === undefined) {
-          service = { status: 'error', detail: 'Connection test skipped because the configured credential is unavailable' }
+      const target = provider ?? (testConnection || testModel ? this.primaryProvider : undefined)
+      if (target !== undefined && (testConnection || testModel)) {
+        const entry = await this.resolveProviderEnv(target)
+        if (entry === undefined) {
+          if (testConnection) {
+            service = { status: 'error', detail: `Connection test skipped because credential ${String(target.credential)} is unavailable` }
+          }
+          if (testModel) {
+            model = { status: 'error', detail: `Vision model test skipped because credential ${String(target.credential)} is unavailable` }
+          }
         } else {
-          operation.metrics.usedVisionService = true
-          const endpoint = `${this.config.provider.baseUrl}/models`
-          try {
-            const started = Date.now()
-            const headers: Record<string, string> = {
-              Accept: 'application/json',
-              'User-Agent': this.config.provider.userAgent,
+          if (testConnection) {
+            operation.metrics.usedVisionService = true
+            const endpoint = `${target.baseUrl}/models`
+            try {
+              const started = Date.now()
+              const headers: Record<string, string> = {
+                Accept: 'application/json',
+                'User-Agent': target.userAgent,
+              }
+              if (target.protocol === 'anthropic') {
+                headers['x-api-key'] = entry.env.VISION_API_KEY
+                headers['anthropic-version'] = '2023-06-01'
+              } else {
+                headers.Authorization = `Bearer ${entry.env.VISION_API_KEY}`
+              }
+              const response = await fetch(endpoint, {
+                method: 'GET',
+                headers,
+                signal: operation.signal,
+              })
+              operation.metrics.upstreamMs += Date.now() - started
+              await response.body?.cancel().catch(() => {})
+              if (response.ok) {
+                service = { status: 'ok', detail: `Service responded at ${endpoint} (HTTP ${response.status})` }
+              } else if (response.status === 401) {
+                service = { status: 'error', detail: `Service rejected the configured credential (HTTP ${response.status})` }
+              } else if (response.status === 403) {
+                // Some providers (e.g. Groq preview/account restrictions) block GET /models
+                // while real multimodal requests still work. Treat 403 as a warning so the
+                // explicit vision-model test, not the model list endpoint, decides access.
+                service = { status: 'warning', detail: `Service is reachable but restricted GET /models (HTTP 403); the credential may still be valid for real vision requests` }
+              } else if (response.status === 404 || response.status === 405) {
+                service = { status: 'warning', detail: `Service is reachable but does not expose GET /models (HTTP ${response.status})` }
+              } else if (response.status === 429) {
+                service = { status: 'warning', detail: 'Service is reachable but rate-limited the connection test (HTTP 429)' }
+              } else {
+                service = { status: 'error', detail: `Service connection test failed with HTTP ${response.status}` }
+              }
+            } catch {
+              if (operation.signal.aborted) throw new VisionToolkitError('cancelled', 'vision_toolkit_health: connection test cancelled')
+              service = { status: 'error', detail: `Service could not be reached at ${endpoint}` }
             }
-            if (this.config.provider.protocol === 'anthropic') {
-              headers['x-api-key'] = resolvedCredential.value
-              headers['anthropic-version'] = '2023-06-01'
-            } else {
-              headers.Authorization = `Bearer ${resolvedCredential.value}`
+          }
+          if (testModel) {
+            try {
+              const attemptDeadline = createDeadline(operation.signal, target.timeoutMs)
+              try {
+                const result = await this.runUpstream(
+                  'glance',
+                  [VISION_MODEL_TEST_IMAGE, '-q', VISION_MODEL_TEST_PROMPT],
+                  { signal: attemptDeadline.signal, metrics: operation.metrics },
+                  entry.env,
+                )
+                if (result.stdout.trim().length === 0) {
+                  throw new VisionToolkitError('output', 'glance: vision API returned an empty description')
+                }
+                model = {
+                  status: 'ok',
+                  detail: `Vision model ${target.model} completed a multimodal request`,
+                }
+              } finally {
+                attemptDeadline.cleanup()
+              }
+            } catch (error) {
+              if (operation.signal.aborted) throw error
+              const detail = error instanceof Error ? error.message : String(error)
+              model = { status: 'error', detail: `Vision model test failed: ${detail.slice(0, 600)}` }
             }
-            const response = await fetch(endpoint, {
-              method: 'GET',
-              headers,
-              signal: operation.signal,
-            })
-            operation.metrics.upstreamMs += Date.now() - started
-            await response.body?.cancel().catch(() => {})
-            if (response.ok) {
-              service = { status: 'ok', detail: `Service responded at ${endpoint} (HTTP ${response.status})` }
-            } else if (response.status === 401) {
-              service = { status: 'error', detail: `Service rejected the configured credential (HTTP ${response.status})` }
-            } else if (response.status === 403) {
-              // Some providers (e.g. Groq preview/account restrictions) block GET /models
-              // while real multimodal requests still work. Treat 403 as a warning so the
-              // explicit vision-model test, not the model list endpoint, decides access.
-              service = { status: 'warning', detail: `Service is reachable but restricted GET /models (HTTP 403); the credential may still be valid for real vision requests` }
-            } else if (response.status === 404 || response.status === 405) {
-              service = { status: 'warning', detail: `Service is reachable but does not expose GET /models (HTTP ${response.status})` }
-            } else if (response.status === 429) {
-              service = { status: 'warning', detail: 'Service is reachable but rate-limited the connection test (HTTP 429)' }
-            } else {
-              service = { status: 'error', detail: `Service connection test failed with HTTP ${response.status}` }
-            }
-          } catch {
-            if (operation.signal.aborted) throw new VisionToolkitError('cancelled', 'vision_toolkit_health: connection test cancelled')
-            service = { status: 'error', detail: `Service could not be reached at ${endpoint}` }
           }
         }
       }
-      if (testModel) {
-        if (resolvedCredential === undefined) {
-          model = { status: 'error', detail: 'Vision model test skipped because the configured credential is unavailable' }
-        } else {
-          try {
-            const result = await this.runUpstream(
-              'glance',
-              [VISION_MODEL_TEST_IMAGE, '-q', VISION_MODEL_TEST_PROMPT],
-              operation,
-              this.providerEnv(this.primaryProvider, resolvedCredential),
-            )
-            if (result.stdout.trim().length === 0) {
-              throw new VisionToolkitError('output', 'glance: vision API returned an empty description')
-            }
-            model = {
-              status: 'ok',
-              detail: `Vision model ${this.config.provider.model} completed a multimodal request`,
-            }
-          } catch (error) {
-            if (operation.signal.aborted) throw error
-            const detail = error instanceof Error ? error.message : String(error)
-            model = { status: 'error', detail: `Vision model test failed: ${detail.slice(0, 600)}` }
-          }
-        }
-      }
-      const checks = { python, dependencies, chrome, credential, artifactDirectory, tempDirectory, service, model }
+      const checks = { python, dependencies, chrome, service, model }
       const healthy = Object.values(checks).every(check => check.status !== 'error')
       return {
         pluginVersion: PLUGIN_VERSION,
@@ -2335,6 +2325,7 @@ export class VisionToolkitRuntime {
         healthy,
         connectionTested: testConnection,
         modelTested: testModel,
+        ...(provider === undefined ? {} : { providerName: provider.name }),
       }
     })
   }

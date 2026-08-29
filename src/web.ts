@@ -24,6 +24,7 @@ import {
   resolveConfig,
   isBuiltInFreeVisionProvider,
   VISION_TOOLKIT_SETTINGS_NAMESPACE,
+  type ResolvedProvider,
   type ResolvedVisionToolkitConfig,
   type VisionToolkitConfig,
 } from './config.ts'
@@ -66,6 +67,13 @@ export interface VisionToolkitSettingsSnapshot {
     source?: string
     writable: boolean
   }
+  /** Per-provider credential states, aligned with `settings.value.providers` order. */
+  credentials: Array<{
+    ref: string
+    configured: boolean
+    source?: string
+    writable: boolean
+  }>
   runtime: RuntimeManagerStatus
   release: {
     pluginVersion: string
@@ -87,6 +95,8 @@ interface HealthRequest {
   action: 'health'
   testConnection: boolean
   testModel: boolean
+  /** 0-based provider index; when absent, the primary provider is tested. */
+  providerIndex?: number
 }
 
 interface CredentialRequest {
@@ -94,6 +104,11 @@ interface CredentialRequest {
   expectedRevision: number
   ref: CredentialRef
   value: string
+}
+
+interface DeleteCredentialRequest {
+  action: 'delete-credential'
+  ref: CredentialRef
 }
 
 interface CheckUpdateRequest {
@@ -105,7 +120,7 @@ interface ApplyUpdateRequest {
   expectedVersion: string
 }
 
-type SettingsRequest = SaveRequest | HealthRequest | CredentialRequest | CheckUpdateRequest | ApplyUpdateRequest
+type SettingsRequest = SaveRequest | HealthRequest | CredentialRequest | DeleteCredentialRequest | CheckUpdateRequest | ApplyUpdateRequest
 
 interface JsonError {
   ok: false
@@ -189,7 +204,16 @@ function parseRequest(value: unknown): SettingsRequest {
     const testModel = value.testModel === undefined ? false : value.testModel
     if (typeof testModel !== 'boolean') throw new TypeError('health.testModel must be boolean')
     if (testModel && !value.testConnection) throw new TypeError('health.testModel requires health.testConnection')
-    return { action: 'health', testConnection: value.testConnection, testModel }
+    const providerIndex = value.providerIndex
+    if (providerIndex !== undefined && (!Number.isSafeInteger(providerIndex) || (providerIndex as number) < 0)) {
+      throw new TypeError('health.providerIndex must be a non-negative integer')
+    }
+    return {
+      action: 'health',
+      testConnection: value.testConnection,
+      testModel,
+      ...(providerIndex === undefined ? {} : { providerIndex: providerIndex as number }),
+    }
   }
   if (value.action === 'save') {
     if (!Number.isSafeInteger(value.expectedRevision) || (value.expectedRevision as number) < 0) {
@@ -222,6 +246,12 @@ function parseRequest(value: unknown): SettingsRequest {
       ref: credentialRef(value.ref),
       value: secret,
     }
+  }
+  if (value.action === 'delete-credential') {
+    if (typeof value.ref !== 'string' || value.ref.trim().length === 0) {
+      throw new TypeError('delete-credential.ref must be a non-empty string')
+    }
+    return { action: 'delete-credential', ref: credentialRef(value.ref.trim()) }
   }
   if (value.action === 'check-update') return { action: 'check-update' }
   if (value.action === 'apply-update') {
@@ -272,6 +302,18 @@ export class VisionToolkitWebBackend {
     const value = descriptor.value as VisionToolkitConfig
     const resolved = resolveConfig(value)
     const credential = await this.credential(resolved)
+    const credentials = await Promise.all(resolved.providers.map(async provider => {
+      if (isBuiltInFreeVisionProvider(provider)) {
+        return { ref: String(provider.credential), configured: true, source: 'built-in-free', writable: false }
+      }
+      const info = await this.ctx.credentials.describe(credentialRef(String(provider.credential)))
+      return {
+        ref: String(provider.credential),
+        configured: info.configured,
+        ...(info.source === undefined ? {} : { source: info.source }),
+        writable: info.writable,
+      }
+    }))
     const update = await this.updater.capability()
     return {
       schemaVersion: 1,
@@ -289,6 +331,7 @@ export class VisionToolkitWebBackend {
         ...(credential.source === undefined ? {} : { source: credential.source }),
         writable: credential.writable,
       },
+      credentials,
       runtime: this.manager.status(),
       release: {
         pluginVersion: PLUGIN_VERSION,
@@ -330,16 +373,21 @@ export class VisionToolkitWebBackend {
       )
     }
     const resolved = resolveConfig(descriptor.value as VisionToolkitConfig)
-    const currentRef = credentialRef(String(resolved.provider.credential))
-    if (currentRef !== request.ref) {
+    const provider = resolved.providers.find(entry => String(entry.credential) === String(request.ref))
+    if (provider === undefined) {
       throw new CredentialReferenceConflictError(
-        `credential reference changed from "${request.ref}" to "${currentRef}"; reload Settings and try again`,
+        `credential reference "${String(request.ref)}" does not match any configured vision provider; reload Settings and try again`,
       )
     }
-    if (isBuiltInFreeVisionProvider(resolved.provider)) {
+    if (isBuiltInFreeVisionProvider(provider)) {
       throw new Error('The built-in free vision provider does not accept a user API key')
     }
-    await this.ctx.credentials.set(currentRef, request.value)
+    await this.ctx.credentials.set(request.ref, request.value)
+    return this.snapshot()
+  }
+
+  private async deleteCredential(request: DeleteCredentialRequest): Promise<VisionToolkitSettingsSnapshot> {
+    await this.ctx.credentials.unset(request.ref)
     return this.snapshot()
   }
 
@@ -351,12 +399,20 @@ export class VisionToolkitWebBackend {
     req.socket.once('close', abort)
     try {
       const runtime = this.manager.current()
+      let provider: ResolvedProvider | undefined
+      if (request.providerIndex !== undefined) {
+        const resolved = resolveConfig(descriptorOf(this.ctx).value as VisionToolkitConfig)
+        provider = resolved.providers[request.providerIndex]
+        if (provider === undefined) {
+          throw new Error(`provider index ${request.providerIndex} is out of range`)
+        }
+      }
       // Use the prepared runtime home instead of the host process cwd.
       return await runtime.health(request.testConnection, {
         signal: controller.signal,
         workspace: runtime.upstreamVersion.runtimeHome,
         sessionId: 'vision-toolkit-settings',
-      }, request.testModel)
+      }, request.testModel, provider)
     } finally {
       req.off('aborted', abort)
       req.socket.off('close', abort)
@@ -400,6 +456,9 @@ export class VisionToolkitWebBackend {
           break
         case 'credential':
           responseJson(res, 200, { ok: true, value: await this.saveCredential(parsed) })
+          break
+        case 'delete-credential':
+          responseJson(res, 200, { ok: true, value: await this.deleteCredential(parsed) })
           break
         case 'check-update':
           responseJson(res, 200, { ok: true, value: await this.updater.check() })

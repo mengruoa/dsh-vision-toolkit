@@ -14,6 +14,8 @@ export declare const VISION_TOOLKIT_SETTINGS_NAMESPACE: import("@deepseek-ai/dsh
 export declare const DEFAULT_VISION_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 /** One online vision provider in the failover pool. */
 export interface VisionProviderConfig {
+    /** Stable unique id used to derive the auto-generated credential name. */
+    id?: string;
     /** Display label shown in Settings; defaults to the model name. */
     name?: string;
     /** Whether this provider participates in the failover pool (default true). */
@@ -30,6 +32,8 @@ export interface VisionProviderConfig {
     anthropicThinking?: 'omit' | 'disabled' | 'adaptive';
     /** Outbound User-Agent for provider requests and connection tests. */
     userAgent?: string;
+    /** Per-provider single request timeout in milliseconds. */
+    timeoutMs?: number;
     /** Per-provider maximum input image bytes; larger images skip to a later provider or are compressed. */
     maxImageBytes?: number;
     /** Per-provider maximum decoded pixel count per input image. */
@@ -112,6 +116,8 @@ export interface VisionToolkitConfig {
 export declare const Config: Schema<VisionToolkitConfig>;
 /** One resolved online vision provider, with every default materialized. */
 export interface ResolvedProvider {
+    /** Stable unique id used to derive the auto-generated credential name. */
+    id?: string;
     name: string;
     enabled: boolean;
     baseUrl: string;
@@ -120,6 +126,7 @@ export interface ResolvedProvider {
     protocol: 'openai' | 'anthropic';
     anthropicThinking: 'omit' | 'disabled' | 'adaptive';
     userAgent: string;
+    timeoutMs: number;
     maxImageBytes: number;
     maxImagePixels: number;
     concurrency: number;

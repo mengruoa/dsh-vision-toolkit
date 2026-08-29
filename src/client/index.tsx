@@ -31,8 +31,6 @@ const DEFAULT_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKi
 const BUILT_IN_FREE_VISION_BASE_URL = 'https://vision.anionex.me/v1'
 const BUILT_IN_FREE_VISION_CREDENTIAL = 'ANIONEX_FREE_VISION'
 const BUILT_IN_FREE_VISION_MODEL = 'gemini-3.7-flash'
-const AIHUBMIX_TUTORIAL_URL_EN = 'https://github.com/Anionex/dsh-vision-toolkit/blob/main/docs/aihubmix-gemini-vision.md'
-const AIHUBMIX_TUTORIAL_URL_ZH = 'https://github.com/Anionex/dsh-vision-toolkit/blob/main/docs/aihubmix-gemini-vision.zh.md'
 
 const en = {
   nav: 'Vision',
@@ -51,7 +49,11 @@ const en = {
   moveUp: 'Move up',
   moveDown: 'Move down',
   removeProvider: 'Remove',
-  primaryKeyHint: 'The API key field above stores the key for the first provider; additional providers use their own credential names.',
+  prioritySort: 'Provider priority',
+  prioritySortHint: 'Order the providers by failover priority. The top one is tried first; request order here is the priority order.',
+  runtimeCheck: 'Runtime check',
+  runtimeCheckHint: 'Checks the local Python environment (with its libraries) and the browser used for HTML screenshots.',
+  apiKeyBuiltInFree: 'The built-in free provider needs no user key.',
   aihubmixTutorial: 'Need an AIHubMix key for free Gemini 3.7 Flash vision? Follow the signup guide →',
   baseUrl: 'Base URL',
   apiKey: 'API key',
@@ -250,7 +252,11 @@ const zh: Record<LocaleKey, string> = {
   moveUp: '上移',
   moveDown: '下移',
   removeProvider: '移除',
-  primaryKeyHint: '上方的 API 密钥输入框只保存第一个服务的密钥；其他服务使用各自的凭据名称。',
+  prioritySort: '服务优先级',
+  prioritySortHint: '按故障转移优先级排列服务；排在最上面的最先尝试，这里的顺序就是优先级顺序。',
+  runtimeCheck: '运行检查',
+  runtimeCheckHint: '检查本地 Python 环境（含依赖库）和用于网页截图的浏览器。',
+  apiKeyBuiltInFree: '内置免费服务无需填写密钥。',
   aihubmixTutorial: '想申请 AIHubMix Key，并用免费 Gemini 3.7 Flash 识图？看这篇图文教程 →',
   baseUrl: 'API 地址',
   apiKey: 'API 密钥',
@@ -486,6 +492,7 @@ interface HealthResult {
 }
 
 interface ProviderValue {
+  id?: string
   name?: string
   enabled?: boolean
   baseUrl?: string
@@ -494,6 +501,7 @@ interface ProviderValue {
   protocol?: 'openai' | 'anthropic'
   anthropicThinking?: 'omit' | 'disabled' | 'adaptive'
   userAgent?: string
+  timeoutMs?: number
   maxImageBytes?: number
   maxImagePixels?: number
   concurrency?: number
@@ -571,6 +579,7 @@ interface SettingsSnapshot {
   writable: boolean
   settings: { value: SettingsValue; revision: number; applies: 'live' }
   credential: { ref: string; configured: boolean; source?: string; writable: boolean }
+  credentials: Array<{ ref: string; configured: boolean; source?: string; writable: boolean }>
   runtime: {
     ready: boolean
     generation: number
@@ -945,6 +954,7 @@ interface SettingsState {
   status: 'idle' | 'loading' | 'ready' | 'error'
   snapshot?: SettingsSnapshot | undefined
   health?: HealthResult | undefined
+  providerHealth?: Record<number, HealthResult> | undefined
   update?: PluginUpdateCheck | undefined
   restart?: PluginUpdateResult | undefined
   action?: 'save' | 'health' | 'connection' | 'model' | 'check-update' | 'apply-update' | undefined
@@ -997,7 +1007,7 @@ export class VisionSettingsController {
   async save(
     value: SettingsValue,
     expectedRevision: number,
-    credentialValue: string | undefined,
+    credentials: Array<{ ref: string; value: string }>,
     writeSettings: boolean,
   ): Promise<boolean> {
     this.set({ ...this.state, action: 'save', error: undefined, message: undefined })
@@ -1011,7 +1021,7 @@ export class VisionSettingsController {
         })
       }
       if (snapshot === undefined) throw new Error('Vision Toolkit Settings are unavailable')
-      if (credentialValue !== undefined) {
+      for (const credential of credentials) {
         try {
           snapshot = await apiRequest<SettingsSnapshot>({
             method: 'POST',
@@ -1019,8 +1029,8 @@ export class VisionSettingsController {
             body: JSON.stringify({
               action: 'credential',
               expectedRevision: snapshot.settings.revision,
-              ref: snapshot.credential.ref,
-              value: credentialValue,
+              ref: credential.ref,
+              value: credential.value,
             }),
           })
         } catch (error) {
@@ -1028,6 +1038,7 @@ export class VisionSettingsController {
             status: 'ready',
             snapshot,
             health: this.state.health,
+            providerHealth: this.state.providerHealth,
             update: this.state.update,
             restart: this.state.restart,
             error: error instanceof Error ? error.message : String(error),
@@ -1039,6 +1050,7 @@ export class VisionSettingsController {
         status: 'ready',
         snapshot,
         health: this.state.health,
+        providerHealth: this.state.providerHealth,
         update: this.state.update,
         restart: this.state.restart,
         message: 'saved',
@@ -1054,7 +1066,7 @@ export class VisionSettingsController {
     }
   }
 
-  async runHealth(mode: 'health' | 'connection' | 'model'): Promise<void> {
+  async runHealth(mode: 'health' | 'connection' | 'model', providerIndex?: number): Promise<void> {
     const testConnection = mode !== 'health'
     const testModel = mode === 'model'
     this.set({ ...this.state, action: mode, error: undefined, message: undefined })
@@ -1062,9 +1074,19 @@ export class VisionSettingsController {
       const health = await apiRequest<HealthResult>({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'health', testConnection, testModel }),
+        body: JSON.stringify({
+          action: 'health',
+          testConnection,
+          testModel,
+          ...(providerIndex === undefined ? {} : { providerIndex }),
+        }),
       })
-      this.set({ ...this.state, action: undefined, health })
+      if (providerIndex === undefined) {
+        this.set({ ...this.state, action: undefined, health })
+      } else {
+        const providerHealth = { ...(this.state.providerHealth ?? {}), [providerIndex]: health }
+        this.set({ ...this.state, action: undefined, providerHealth })
+      }
     } catch (error) {
       this.set({ ...this.state, action: undefined, error: error instanceof Error ? error.message : String(error) })
     }
@@ -1109,6 +1131,7 @@ export class VisionSettingsController {
 }
 
 interface ProviderDraft {
+  id: string
   name: string
   enabled: boolean
   baseUrl: string
@@ -1117,6 +1140,7 @@ interface ProviderDraft {
   protocol: 'openai' | 'anthropic'
   anthropicThinking: 'omit' | 'disabled' | 'adaptive'
   userAgent: string
+  timeoutMs: string
   maxImageBytes: string
   maxImagePixels: string
   concurrency: string
@@ -1140,16 +1164,40 @@ interface Draft {
   variantAutoSwitch: boolean
 }
 
-function emptyProviderDraft(defaults: { maxImageBytes: number; maxImagePixels: number; concurrency: number }): ProviderDraft {
+function randomProviderId(): string {
+  const bytes = new Uint8Array(6)
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    crypto.getRandomValues(bytes)
+  } else {
+    for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256)
+  }
+  return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('').toUpperCase()
+}
+
+function autoCredentialName(id: string): string {
+  return `VISION_PROVIDER_${id}`
+}
+
+interface ProviderDefaults {
+  timeoutMs: number
+  maxImageBytes: number
+  maxImagePixels: number
+  concurrency: number
+}
+
+function emptyProviderDraft(defaults: ProviderDefaults): ProviderDraft {
+  const id = randomProviderId()
   return {
+    id,
     name: '',
     enabled: true,
     baseUrl: '',
-    credential: '',
+    credential: autoCredentialName(id),
     model: '',
     protocol: 'openai',
     anthropicThinking: 'omit',
     userAgent: DEFAULT_USER_AGENT,
+    timeoutMs: String(defaults.timeoutMs),
     maxImageBytes: String(defaults.maxImageBytes),
     maxImagePixels: String(defaults.maxImagePixels),
     concurrency: String(defaults.concurrency),
@@ -1157,17 +1205,20 @@ function emptyProviderDraft(defaults: { maxImageBytes: number; maxImagePixels: n
   }
 }
 
-function providerDraftOf(value: ProviderValue | undefined, fallback: ProviderValue | undefined, defaults: { maxImageBytes: number; maxImagePixels: number; concurrency: number }): ProviderDraft {
+function providerDraftOf(value: ProviderValue | undefined, fallback: ProviderValue | undefined, defaults: ProviderDefaults): ProviderDraft {
   const source = value ?? fallback
+  const id = source?.id ?? ''
   return {
+    id,
     name: source?.name ?? '',
     enabled: source?.enabled !== false,
     baseUrl: source?.baseUrl ?? '',
-    credential: source?.credential ?? '',
+    credential: source?.credential ?? autoCredentialName(id),
     model: source?.model ?? '',
     protocol: source?.protocol ?? 'openai',
     anthropicThinking: source?.anthropicThinking ?? 'omit',
     userAgent: source?.userAgent ?? DEFAULT_USER_AGENT,
+    timeoutMs: String(source?.timeoutMs ?? defaults.timeoutMs),
     maxImageBytes: String(source?.maxImageBytes ?? defaults.maxImageBytes),
     maxImagePixels: String(source?.maxImagePixels ?? defaults.maxImagePixels),
     concurrency: String(source?.concurrency ?? defaults.concurrency),
@@ -1176,7 +1227,8 @@ function providerDraftOf(value: ProviderValue | undefined, fallback: ProviderVal
 }
 
 function draftOf(value: SettingsValue): Draft {
-  const globalDefaults = {
+  const globalDefaults: ProviderDefaults = {
+    timeoutMs: value.timeoutMs ?? 30000,
     maxImageBytes: value.maxImageBytes ?? 4194304,
     maxImagePixels: value.maxImagePixels ?? 20000000,
     concurrency: value.concurrency ?? 4,
@@ -1188,7 +1240,7 @@ function draftOf(value: SettingsValue): Draft {
   return {
     providers,
     language: value.language ?? 'zh',
-    timeoutMs: String(value.timeoutMs ?? 30000),
+    timeoutMs: String(globalDefaults.timeoutMs),
     maxImageBytes: String(globalDefaults.maxImageBytes),
     maxImagePixels: String(globalDefaults.maxImagePixels),
     concurrency: String(globalDefaults.concurrency),
@@ -1221,6 +1273,7 @@ function apiKeyFailure(value: string, t: Translate): string | undefined {
 
 function valueOf(draft: Draft, t: Translate): SettingsValue {
   const providers: ProviderValue[] = draft.providers.map(provider => ({
+    ...(provider.id.length === 0 ? {} : { id: provider.id }),
     ...(provider.name.trim().length === 0 ? {} : { name: provider.name.trim() }),
     ...(provider.enabled ? {} : { enabled: false }),
     ...(provider.baseUrl.trim().length === 0 ? {} : { baseUrl: provider.baseUrl.trim() }),
@@ -1229,6 +1282,7 @@ function valueOf(draft: Draft, t: Translate): SettingsValue {
     protocol: provider.protocol,
     anthropicThinking: provider.anthropicThinking,
     ...(provider.userAgent.trim() === DEFAULT_USER_AGENT ? {} : { userAgent: provider.userAgent.trim() }),
+    ...(provider.timeoutMs.trim().length === 0 ? {} : { timeoutMs: positiveInteger(provider.timeoutMs, t('timeout'), t) }),
     ...(provider.maxImageBytes.trim().length === 0 ? {} : { maxImageBytes: positiveInteger(provider.maxImageBytes, t('maxBytes'), t) }),
     ...(provider.maxImagePixels.trim().length === 0 ? {} : { maxImagePixels: positiveInteger(provider.maxImagePixels, t('maxPixels'), t) }),
     ...(provider.concurrency.trim().length === 0 ? {} : { concurrency: positiveInteger(provider.concurrency, t('concurrency'), t) }),
@@ -1273,15 +1327,6 @@ function settingsDraftChanged(draft: Draft, saved: SettingsValue, t: Translate):
   } catch {
     return true
   }
-}
-
-function isBuiltInFreeVisionDraft(draft: Draft): boolean {
-  const primary = draft.providers[0]
-  if (primary === undefined) return false
-  return primary.baseUrl.trim().replace(/\/+$/, '') === BUILT_IN_FREE_VISION_BASE_URL
-    && primary.credential.trim() === BUILT_IN_FREE_VISION_CREDENTIAL
-    && primary.model.trim() === BUILT_IN_FREE_VISION_MODEL
-    && primary.protocol === 'openai'
 }
 
 interface SettingsInjected {
@@ -1366,18 +1411,6 @@ function healthDetail(name: string, detail: string, t: Translate): string {
   return detail
 }
 
-function modelTestTag(health: HealthResult, check: HealthCheck): { status: 'ok' | 'warning' | 'error'; label: LocaleKey } {
-  if (!health.modelTested) return { status: 'warning', label: 'modelTestNotRunTag' }
-  if (check.status === 'ok') return { status: 'ok', label: 'modelTestVerifiedTag' }
-  return { status: 'error', label: 'modelTestFailedTag' }
-}
-
-function credentialSource(source: string, t: Translate): string {
-  if (source === 'env') return t('sourceEnv')
-  if (source === 'file') return t('sourceFile')
-  return source
-}
-
 const UPDATE_REASON_KEYS: Record<PluginUpdateUnavailableReason, LocaleKey> = {
   'profile-not-found': 'updateReasonProfileNotFound',
   'not-direct-dependency': 'updateReasonNotDependency',
@@ -1397,7 +1430,8 @@ function LoadedSettings({ controller, t }: SettingsInjected) {
   const state = useSyncExternalStore(controller.subscribe, controller.snapshot, controller.snapshot)
   const snapshot = state.snapshot
   const [draft, setDraft] = useState<Draft | undefined>(undefined)
-  const [apiKey, setApiKey] = useState('')
+  const [selectedIndex, setSelectedIndex] = useState(0)
+  const [keys, setKeys] = useState<Record<string, string>>({})
   const [draftError, setDraftError] = useState<string | undefined>(undefined)
   const [copiedCommand, setCopiedCommand] = useState(false)
 
@@ -1454,14 +1488,30 @@ function LoadedSettings({ controller, t }: SettingsInjected) {
     setDraft(current => current === undefined ? current : {
       ...current,
       providers: [...current.providers, emptyProviderDraft({
+        timeoutMs: Number(current.timeoutMs) || 30000,
         maxImageBytes: Number(current.maxImageBytes) || 4194304,
         maxImagePixels: Number(current.maxImagePixels) || 20000000,
         concurrency: Number(current.concurrency) || 4,
       })],
     })
+    setSelectedIndex(draft.providers.length)
   }
   const removeProvider = (index: number): void => {
+    const removed = draft.providers[index]
+    if (removed !== undefined) {
+      // Deleting a provider also deletes its stored credential.
+      void apiRequest<SettingsSnapshot>({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete-credential', ref: removed.credential }),
+      }).catch(() => {})
+    }
     setDraft(current => current === undefined ? current : { ...current, providers: current.providers.filter((_, i) => i !== index) })
+    setSelectedIndex(prev => {
+      if (index < prev) return prev - 1
+      if (prev >= draft.providers.length - 1) return Math.max(0, draft.providers.length - 2)
+      return prev
+    })
   }
   const moveProvider = (index: number, delta: number): void => {
     setDraft(current => {
@@ -1474,44 +1524,59 @@ function LoadedSettings({ controller, t }: SettingsInjected) {
       providers.splice(target, 0, entry)
       return { ...current, providers }
     })
+    setSelectedIndex(prev => {
+      const target = index + delta
+      if (prev === index) return target
+      if (target < index && prev >= target && prev < index) return prev + 1
+      if (target > index && prev > index && prev <= target) return prev - 1
+      return prev
+    })
   }
   const save = (): void => {
     try {
-      const keyFailure = apiKeyFailure(apiKey, t)
-      if (keyFailure !== undefined) {
-        setDraftError(keyFailure)
-        return
+      for (const value of Object.values(keys)) {
+        const failure = apiKeyFailure(value, t)
+        if (failure !== undefined) {
+          setDraftError(failure)
+          return
+        }
       }
-      const credentialValue = apiKey.length === 0 ? undefined : apiKey.trim()
+      const credentials = Object.entries(keys)
+        .filter(([, value]) => value.trim().length > 0)
+        .map(([ref, value]) => ({ ref, value: value.trim() }))
+      const savedRefs = new Set(credentials.map(credential => credential.ref))
       setDraftError(undefined)
       void controller.save(
         valueOf(draft, t),
         snapshot.settings.revision,
-        credentialValue,
+        credentials,
         snapshot.writable,
-      ).then(saved => { if (saved) setApiKey('') })
+      ).then(saved => {
+        if (saved) {
+          setKeys(current => Object.fromEntries(Object.entries(current).filter(([ref]) => !savedRefs.has(ref))))
+        }
+      })
     } catch (error) {
       setDraftError(error instanceof Error ? error.message : String(error))
     }
   }
   const busy = state.action !== undefined
-  const credentialMatchesSnapshot = (draft.providers[0]?.credential.trim() ?? '') === snapshot.credential.ref
-  const builtInCredentialChangedProvider = snapshot.credential.source === 'built-in-free'
-    && !isBuiltInFreeVisionDraft(draft)
-  const keyLocked = credentialMatchesSnapshot
-    && !snapshot.credential.writable
-    && !builtInCredentialChangedProvider
-  const canSave = snapshot.writable || (apiKey.length > 0 && !keyLocked)
+  const selectedProvider = draft.providers[selectedIndex]
+  const providerCredentials = snapshot.credentials ?? []
+  const selectedCredential = providerCredentials[selectedIndex]
+  const selectedKey = selectedProvider === undefined ? '' : (keys[selectedProvider.credential] ?? '')
+  const selectedKeyLocked = selectedCredential !== undefined && !selectedCredential.writable
+  const selectedBuiltInFree = selectedCredential?.source === 'built-in-free'
+  const canSave = snapshot.writable || Object.values(keys).some(value => value.trim().length > 0)
   const runtimeErrorTitle = snapshot.runtime.ready ? t('runtimeCandidateRejected') : t('runtimeUnavailable')
   const pluginUpdate = state.update
   const updateCapability = pluginUpdate ?? snapshot.release.update
   const latestVersion = pluginUpdate?.latestVersion
   const updateReason = updateCapability.reason === undefined ? undefined : t(UPDATE_REASON_KEYS[updateCapability.reason])
   const updateCheckSupported = updateCapability.checkSupported ?? updateCapability.supported
-  const updateHasUnsavedChanges = apiKey.length > 0 || settingsDraftChanged(draft, snapshot.settings.value, t)
+  const updateHasUnsavedChanges = Object.values(keys).some(value => value.trim().length > 0) || settingsDraftChanged(draft, snapshot.settings.value, t)
   const manualUpdateProfile = updateCapability.profile ?? 'web'
   const manualUpdateCommand = `dsh plugin --profile ${manualUpdateProfile} add @mengruo/dsh-vision-toolkit@latest --registry=https://registry.npmjs.org/`
-  const aihubmixTutorialUrl = draft?.language === 'en' ? AIHUBMIX_TUTORIAL_URL_EN : AIHUBMIX_TUTORIAL_URL_ZH
   const copyManualUpdate = (): void => {
     void navigator.clipboard?.writeText(manualUpdateCommand)
       .then(() => {
@@ -1525,6 +1590,7 @@ function LoadedSettings({ controller, t }: SettingsInjected) {
     if (!window.confirm(t('updateConfirm', { version: latestVersion }))) return
     void controller.applyUpdate(latestVersion)
   }
+  const providerHealth = state.providerHealth?.[selectedIndex]
 
   return (
     <div className="dvt-settings">
@@ -1537,49 +1603,76 @@ function LoadedSettings({ controller, t }: SettingsInjected) {
       {state.message === 'manual-restart-required' && state.restart !== undefined ? <div className="dvt-alert success">{t('manualRestartRequired', { version: state.restart.toVersion })}</div> : null}
       {snapshot.runtime.lastError === undefined ? null : <div className="dvt-alert error"><strong>{runtimeErrorTitle}</strong><span>{snapshot.runtime.lastError}</span></div>}
 
-      <section className="dvt-panel dvt-essential"><div className="dvt-panel-title"><div><h3>{t('providers')}</h3><p>{t('providerHint')}</p></div><span className={`dvt-badge ${snapshot.credential.configured ? 'ok' : 'error'}`}>{snapshot.credential.configured ? t('configured') : t('missing')}</span></div>
-        <p className="dvt-tutorial-link"><a href={aihubmixTutorialUrl} target="_blank" rel="noreferrer">{t('aihubmixTutorial')}</a></p>
-        {draft.providers.map((provider, index) => (
-          <div key={index} className="dvt-provider-card">
+      <section className="dvt-panel dvt-essential"><div className="dvt-panel-title"><div><h3>{t('providers')}</h3><p>{t('providerHint')}</p></div></div>
+        <div className="dvt-provider-select">
+          <select aria-label={t('providers')} disabled={!snapshot.writable || busy} value={selectedIndex} onChange={(event) => { setSelectedIndex(Number(event.target.value)) }}>
+            {draft.providers.map((provider, index) => (
+              <option key={index} value={index}>{index + 1}. {provider.name.trim() || provider.model.trim() || t('provider')}</option>
+            ))}
+          </select>
+          <Button size="sm" variant="outline" disabled={!snapshot.writable || busy || draft.providers.length >= 32} onClick={addProvider}>{t('addProvider')}</Button>
+          <Button size="sm" variant="outline" disabled={!snapshot.writable || busy || draft.providers.length <= 1} onClick={() => { removeProvider(selectedIndex) }}>{t('removeProvider')}</Button>
+        </div>
+        {selectedProvider === undefined ? null : (
+          <div className="dvt-provider-card">
             <div className="dvt-provider-head">
-              <label className="dvt-check"><input type="checkbox" checked={provider.enabled} disabled={!snapshot.writable || busy} onChange={(event) => { updateProvider(index, 'enabled', event.target.checked) }} /><span>{t('enabled')}</span></label>
-              <span className="dvt-provider-priority">{t('priority', { index: index + 1 })}</span>
-              <div className="dvt-provider-actions">
-                <button type="button" aria-label={t('moveUp')} title={t('moveUp')} disabled={!snapshot.writable || busy || index === 0} onClick={() => { moveProvider(index, -1) }}>↑</button>
-                <button type="button" aria-label={t('moveDown')} title={t('moveDown')} disabled={!snapshot.writable || busy || index === draft.providers.length - 1} onClick={() => { moveProvider(index, 1) }}>↓</button>
-                <button type="button" aria-label={t('removeProvider')} title={t('removeProvider')} disabled={!snapshot.writable || busy || draft.providers.length <= 1} onClick={() => { removeProvider(index) }}>×</button>
-              </div>
+              <label className="dvt-check"><input type="checkbox" checked={selectedProvider.enabled} disabled={!snapshot.writable || busy} onChange={(event) => { updateProvider(selectedIndex, 'enabled', event.target.checked) }} /><span>{t('enabled')}</span></label>
+              <span className="dvt-provider-priority">{t('priority', { index: selectedIndex + 1 })}</span>
             </div>
             <div className="dvt-form-grid">
-              <Field label={t('name')}><Input aria-label={t('name')} value={provider.name} onChange={(event) => { updateProvider(index, 'name', event.target.value) }} placeholder={provider.model || t('model')} /></Field>
-              <Field label={t('model')}><Input aria-label={t('model')} disabled={!snapshot.writable || busy} value={provider.model} onChange={(event) => { updateProvider(index, 'model', event.target.value) }} /></Field>
-              <Field label={t('baseUrl')}><Input aria-label={t('baseUrl')} disabled={!snapshot.writable || busy} value={provider.baseUrl} onChange={(event) => { updateProvider(index, 'baseUrl', event.target.value) }} /></Field>
-              <Field label={t('credential')} hint={t('credentialHint')}><Input aria-label={t('credential')} disabled={!snapshot.writable || busy} value={provider.credential} onChange={(event) => { updateProvider(index, 'credential', event.target.value) }} /></Field>
-              <Field label={t('protocol')}><select aria-label={t('protocol')} disabled={!snapshot.writable || busy} value={provider.protocol} onChange={(event) => { updateProvider(index, 'protocol', event.target.value as 'openai' | 'anthropic') }}><option value="openai">OpenAI Chat Completions</option><option value="anthropic">Anthropic Messages</option></select></Field>
-              <Field label={t('userAgent')}><Input aria-label={t('userAgent')} value={provider.userAgent} onChange={(event) => { updateProvider(index, 'userAgent', event.target.value) }} /></Field>
-              {provider.protocol === 'anthropic' ? <Field label={t('anthropicThinking')} hint={t('anthropicThinkingHint')}><select aria-label={t('anthropicThinking')} value={provider.anthropicThinking} onChange={(event) => { updateProvider(index, 'anthropicThinking', event.target.value as 'omit' | 'disabled' | 'adaptive') }}><option value="omit">omit (widest compatibility)</option><option value="disabled">disabled (model support required)</option><option value="adaptive">adaptive (model support required)</option></select></Field> : null}
-              <Field label={t('maxBytes')}><Input aria-label={t('maxBytes')} inputMode="numeric" value={provider.maxImageBytes} onChange={(event) => { updateProvider(index, 'maxImageBytes', event.target.value) }} /></Field>
-              <Field label={t('maxPixels')}><Input aria-label={t('maxPixels')} inputMode="numeric" value={provider.maxImagePixels} onChange={(event) => { updateProvider(index, 'maxImagePixels', event.target.value) }} /></Field>
-              <Field label={t('concurrency')}><Input aria-label={t('concurrency')} inputMode="numeric" value={provider.concurrency} onChange={(event) => { updateProvider(index, 'concurrency', event.target.value) }} /></Field>
-              <Field label={t('attempts')} hint={t('attemptsHint')}><Input aria-label={t('attempts')} inputMode="numeric" value={provider.attempts} onChange={(event) => { updateProvider(index, 'attempts', event.target.value) }} /></Field>
+              <Field label={t('name')}><Input aria-label={t('name')} value={selectedProvider.name} onChange={(event) => { updateProvider(selectedIndex, 'name', event.target.value) }} placeholder={selectedProvider.model || t('model')} /></Field>
+              <Field label={t('model')}><Input aria-label={t('model')} disabled={!snapshot.writable || busy} value={selectedProvider.model} onChange={(event) => { updateProvider(selectedIndex, 'model', event.target.value) }} /></Field>
+              <Field label={t('baseUrl')}><Input aria-label={t('baseUrl')} disabled={!snapshot.writable || busy} value={selectedProvider.baseUrl} onChange={(event) => { updateProvider(selectedIndex, 'baseUrl', event.target.value) }} /></Field>
+              <Field label={t('protocol')}><select aria-label={t('protocol')} disabled={!snapshot.writable || busy} value={selectedProvider.protocol} onChange={(event) => { updateProvider(selectedIndex, 'protocol', event.target.value as 'openai' | 'anthropic') }}><option value="openai">OpenAI Chat Completions</option><option value="anthropic">Anthropic Messages</option></select></Field>
+              {selectedProvider.protocol === 'anthropic' ? <Field label={t('anthropicThinking')} hint={t('anthropicThinkingHint')}><select aria-label={t('anthropicThinking')} value={selectedProvider.anthropicThinking} onChange={(event) => { updateProvider(selectedIndex, 'anthropicThinking', event.target.value as 'omit' | 'disabled' | 'adaptive') }}><option value="omit">omit (widest compatibility)</option><option value="disabled">disabled (model support required)</option><option value="adaptive">adaptive (model support required)</option></select></Field> : null}
+              <Field label={t('userAgent')}><Input aria-label={t('userAgent')} value={selectedProvider.userAgent} onChange={(event) => { updateProvider(selectedIndex, 'userAgent', event.target.value) }} /></Field>
+              <Field label={t('timeout')}><Input aria-label={t('timeout')} inputMode="numeric" value={selectedProvider.timeoutMs} onChange={(event) => { updateProvider(selectedIndex, 'timeoutMs', event.target.value) }} /></Field>
+              <Field label={t('maxBytes')}><Input aria-label={t('maxBytes')} inputMode="numeric" value={selectedProvider.maxImageBytes} onChange={(event) => { updateProvider(selectedIndex, 'maxImageBytes', event.target.value) }} /></Field>
+              <Field label={t('maxPixels')}><Input aria-label={t('maxPixels')} inputMode="numeric" value={selectedProvider.maxImagePixels} onChange={(event) => { updateProvider(selectedIndex, 'maxImagePixels', event.target.value) }} /></Field>
+              <Field label={t('concurrency')}><Input aria-label={t('concurrency')} inputMode="numeric" value={selectedProvider.concurrency} onChange={(event) => { updateProvider(selectedIndex, 'concurrency', event.target.value) }} /></Field>
+              <Field label={t('attempts')} hint={t('attemptsHint')}><Input aria-label={t('attempts')} inputMode="numeric" value={selectedProvider.attempts} onChange={(event) => { updateProvider(selectedIndex, 'attempts', event.target.value) }} /></Field>
             </div>
+            <Field label={t('apiKey')} hint={selectedBuiltInFree ? t('apiKeyBuiltInFree') : selectedKeyLocked ? t('apiKeyLocked') : t('apiKeyHint')}><Input aria-label={t('apiKey')} type="password" autoComplete="new-password" disabled={busy || selectedKeyLocked || selectedBuiltInFree} placeholder={selectedCredential?.configured ? t('apiKeyPlaceholderConfigured') : t('apiKeyPlaceholderMissing')} value={selectedKey} onChange={(event) => { setKeys(current => ({ ...current, [selectedProvider.credential]: event.target.value })); setDraftError(undefined) }} /></Field>
+            <div className="dvt-provider-tests">
+              <Button size="sm" variant="outline" disabled={busy || !snapshot.runtime.ready} onClick={() => { void controller.runHealth('connection', selectedIndex) }}>{state.action === 'connection' ? t('testing') : t('testConnection')}</Button>
+              <Button size="sm" variant="primary" disabled={busy || !snapshot.runtime.ready} onClick={() => { void controller.runHealth('model', selectedIndex) }}>{state.action === 'model' ? t('testingModel') : t('testModel')}</Button>
+            </div>
+            {providerHealth === undefined ? null : <div className="dvt-provider-test-result">{(['service', 'model'] as const).map(name => {
+              const check = providerHealth.checks[name]
+              if (check === undefined) return null
+              return <div key={name} data-status={check.status}><span>{t(HEALTH_NAME_KEYS[name] ?? 'health')}</span><strong>{t(HEALTH_STATUS_KEYS[check.status])}</strong><p>{healthDetail(name, check.detail, t)}</p></div>
+            })}</div>}
           </div>
-        ))}
-        <div className="dvt-actions"><Button variant="outline" disabled={!snapshot.writable || busy} onClick={addProvider}>{t('addProvider')}</Button></div>
-        <Field label={t('apiKey')} hint={keyLocked ? t('apiKeyLocked') : `${snapshot.credential.source === undefined ? t('apiKeyHint') : `${t('apiKeyHint')} ${t('sourceHint', { source: t('source'), value: credentialSource(snapshot.credential.source, t) })}`} ${t('primaryKeyHint')}`}><Input aria-label={t('apiKey')} type="password" autoComplete="new-password" disabled={busy || keyLocked} placeholder={snapshot.credential.configured ? t('apiKeyPlaceholderConfigured') : t('apiKeyPlaceholderMissing')} value={apiKey} onChange={(event) => { setApiKey(event.target.value); setDraftError(undefined) }} /></Field>
+        )}
       </section>
 
       <div className="dvt-save-row"><Button variant="primary" disabled={!canSave || busy} onClick={save}>{state.action === 'save' ? t('saving') : t('save')}</Button><Button variant="outline" disabled={busy} onClick={() => { void controller.load() }}>{t('reload')}</Button></div>
 
-      <section className="dvt-panel"><div className="dvt-panel-title"><div><h3>{t('health')}</h3><p>{t('connectionHint')}</p></div><div className="dvt-actions"><Button size="sm" variant="outline" disabled={busy || !snapshot.runtime.ready} onClick={() => { void controller.runHealth('health') }}>{state.action === 'health' ? t('testing') : t('runHealth')}</Button><Button size="sm" variant="outline" disabled={busy || !snapshot.runtime.ready} onClick={() => { void controller.runHealth('connection') }}>{state.action === 'connection' ? t('testing') : t('testConnection')}</Button><Button size="sm" variant="primary" disabled={busy || !snapshot.runtime.ready} onClick={() => { void controller.runHealth('model') }}>{state.action === 'model' ? t('testingModel') : t('testModel')}</Button></div></div>
-        <p className="dvt-muted">{t('saveBeforeTesting')}</p>
-        {state.health === undefined ? <p className="dvt-muted">{t('notTested')}</p> : <div className="dvt-health-grid">{Object.entries(state.health.checks).map(([name, check]) => {
-          const testTag = name === 'model' ? modelTestTag(state.health as HealthResult, check) : undefined
-          return <div key={name} data-status={check.status}><span>{t(HEALTH_NAME_KEYS[name] ?? 'health')}</span>{testTag === undefined ? null : <em className="dvt-health-test-tag" data-status={testTag.status}>{t(testTag.label)}</em>}<strong>{t(HEALTH_STATUS_KEYS[check.status])}</strong><p>{healthDetail(name, check.detail, t)}</p></div>
-        })}</div>}
+      <section className="dvt-panel"><div className="dvt-panel-title"><div><h3>{t('prioritySort')}</h3><p>{t('prioritySortHint')}</p></div></div>
+        <div className="dvt-sorter">
+          {draft.providers.map((provider, index) => (
+            <div key={index} className="dvt-sorter-row">
+              <span className="dvt-sorter-index">{index + 1}</span>
+              <span className="dvt-sorter-name">{provider.name.trim() || provider.model.trim() || t('provider')}</span>
+              <div className="dvt-provider-actions">
+                <button type="button" aria-label={t('moveUp')} title={t('moveUp')} disabled={!snapshot.writable || busy || index === 0} onClick={() => { moveProvider(index, -1) }}>↑</button>
+                <button type="button" aria-label={t('moveDown')} title={t('moveDown')} disabled={!snapshot.writable || busy || index === draft.providers.length - 1} onClick={() => { moveProvider(index, 1) }}>↓</button>
+              </div>
+            </div>
+          ))}
+        </div>
       </section>
 
       <section className="dvt-panel dvt-update-panel">
+        <div className="dvt-panel-title">
+          <div><h3>{t('runtimeCheck')}</h3><p>{t('runtimeCheckHint')}</p></div>
+          <div className="dvt-actions"><Button size="sm" variant="outline" disabled={busy || !snapshot.runtime.ready} onClick={() => { void controller.runHealth('health') }}>{state.action === 'health' ? t('testing') : t('runHealth')}</Button></div>
+        </div>
+        {state.health === undefined ? <p className="dvt-muted">{t('notTested')}</p> : <div className="dvt-health-grid">{(['python', 'dependencies', 'chrome'] as const).map(name => {
+          const check = state.health?.checks[name]
+          if (check === undefined) return null
+          return <div key={name} data-status={check.status}><span>{t(HEALTH_NAME_KEYS[name] ?? 'health')}</span><strong>{t(HEALTH_STATUS_KEYS[check.status])}</strong><p>{healthDetail(name, check.detail, t)}</p></div>
+        })}</div>}
         <div className="dvt-panel-title">
           <div><h3>{t('updates')}</h3><p>{t('updatesHint')}</p></div>
           <span className={`dvt-badge ${pluginUpdate?.updateAvailable ? 'warning' : pluginUpdate !== undefined && pluginUpdate.supported ? 'ok' : ''}`}>
@@ -1606,12 +1699,8 @@ function LoadedSettings({ controller, t }: SettingsInjected) {
       <details className="dvt-advanced">
         <summary><span><strong>{t('advanced')}</strong><small>{t('advancedHint')}</small></span><span className="dvt-details-chevron" aria-hidden="true">⌄</span></summary>
         <div className="dvt-advanced-body">
-          <section className="dvt-panel"><div className="dvt-panel-title"><h3>{t('limits')}</h3></div><div className="dvt-form-grid">
+          <section className="dvt-panel"><div className="dvt-panel-title"><h3>{t('language')}</h3></div><div className="dvt-form-grid">
             <Field label={t('language')}><select value={draft.language} onChange={(event) => { update('language', event.target.value as 'zh' | 'en') }}><option value="zh">中文</option><option value="en">English</option></select></Field>
-            <Field label={t('timeout')}><Input inputMode="numeric" value={draft.timeoutMs} onChange={(event) => { update('timeoutMs', event.target.value) }} /></Field>
-            <Field label={t('maxBytes')}><Input inputMode="numeric" value={draft.maxImageBytes} onChange={(event) => { update('maxImageBytes', event.target.value) }} /></Field>
-            <Field label={t('maxPixels')}><Input inputMode="numeric" value={draft.maxImagePixels} onChange={(event) => { update('maxImagePixels', event.target.value) }} /></Field>
-            <Field label={t('concurrency')}><Input inputMode="numeric" value={draft.concurrency} onChange={(event) => { update('concurrency', event.target.value) }} /></Field>
           </div></section>
 
           <section className="dvt-panel"><div className="dvt-panel-title"><h3>{t('imageInput')}</h3></div><label className="dvt-check"><input type="checkbox" checked={draft.hiddenVariants} disabled={!snapshot.writable || busy} onChange={(event) => { update('hiddenVariants', event.target.checked) }} /><span>{t('hiddenVariantsLabel')}</span><small>{t('hiddenVariantsHint')}</small></label></section>
@@ -1645,7 +1734,7 @@ const CSS = `
 .dvt-settings-footer{margin-top:8px;padding:20px 2px 4px;border-top:1px solid var(--dsw-alias-border-l1);opacity:.82}.dvt-settings-footer h2{font-size:18px;letter-spacing:-.015em;margin:3px 0 5px}.dvt-settings-footer p{font-size:11px;line-height:1.5}.dvt-release{min-width:220px}.dvt-release span{white-space:nowrap}.dvt-essential{border-color:color-mix(in srgb,var(--dsw-alias-state-business-primary) 30%,var(--dsw-alias-border-l1));box-shadow:var(--dsw-shadow-lv1),0 0 0 3px color-mix(in srgb,var(--dsw-alias-state-business-primary) 5%,transparent)}.dvt-advanced{border:1px solid var(--dsw-alias-border-l1);border-radius:14px;background:var(--dsw-alias-bg-layer-1);overflow:hidden}.dvt-advanced>summary{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 15px;cursor:pointer;list-style:none}.dvt-advanced>summary::-webkit-details-marker{display:none}.dvt-advanced>summary>span:first-child{display:grid;gap:3px}.dvt-advanced>summary strong{font-size:13px}.dvt-advanced>summary small{font-size:10px;line-height:1.45;color:var(--dsw-alias-label-secondary);font-weight:400}.dvt-details-chevron{font-size:15px;opacity:.55;transition:transform .16s ease}.dvt-advanced[open] .dvt-details-chevron{transform:rotate(180deg)}.dvt-advanced-body{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;padding:0 12px 12px}.dvt-advanced-body>.dvt-panel{box-shadow:none}
 .dvt-health-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px}.dvt-health-grid>div{padding:9px 10px;border-radius:9px;background:var(--dsw-alias-bg-layer-2);border-left:3px solid var(--dsw-alias-border-l4)}.dvt-health-grid>div[data-status=ok]{border-left-color:var(--dsw-alias-state-success-primary)}.dvt-health-grid>div[data-status=warning],.dvt-health-grid>div[data-status=not_tested]{border-left-color:var(--dsw-alias-state-warn-primary)}.dvt-health-grid>div[data-status=error]{border-left-color:var(--dsw-alias-state-error-primary)}.dvt-health-grid span{font-size:10px;text-transform:capitalize}.dvt-health-grid strong{float:right;font-size:9px;text-transform:uppercase;color:var(--dsw-alias-label-secondary)}.dvt-health-test-tag{display:inline-flex;margin-left:6px;padding:1px 6px;border-radius:999px;background:var(--dsw-alias-bg-layer-1);font-size:9px;font-style:normal;font-weight:600;color:var(--dsw-alias-label-secondary)}.dvt-health-test-tag[data-status=ok]{background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 12%,transparent);color:var(--dsw-alias-state-success-primary)}.dvt-health-test-tag[data-status=warning]{background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 12%,transparent);color:var(--dsw-alias-state-warn-label)}.dvt-health-test-tag[data-status=error]{background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 12%,transparent);color:var(--dsw-alias-state-error-primary)}.dvt-health-grid p{clear:both;margin:5px 0 0;font-size:10px;line-height:1.4;color:var(--dsw-alias-label-secondary)}.dvt-loading{padding:24px;border-radius:12px;background:var(--dsw-alias-bg-layer-2);font-size:12px;color:var(--dsw-alias-label-secondary)}
 .dvt-paste-dock{box-sizing:border-box;width:calc(100% - 32px);max-width:var(--dsh-composer-card-max-width,960px);margin:0 auto;display:flex;flex-wrap:wrap;gap:6px;padding:0 2px 6px}.dvt-paste-chip{max-width:100%;height:32px;box-sizing:border-box;display:flex;align-items:center;gap:7px;padding:0 6px 0 10px;border:1px solid var(--dsw-alias-border-l1);border-radius:9px;background:var(--dsw-specific-tip);font-size:12px}.dvt-paste-chip[data-status=copying]{border-color:var(--dsw-alias-state-business-primary)}.dvt-paste-chip[data-status=error]{border-color:var(--dsw-alias-state-error-primary)}.dvt-paste-name{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dvt-paste-detail{color:var(--dsw-alias-label-caption);max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dvt-paste-chip[data-status=error] .dvt-paste-detail{color:var(--dsw-alias-state-error-primary)}.dvt-paste-chip button{width:20px;height:20px;display:grid;place-items:center;border:0;border-radius:50%;padding:0;background:transparent;color:var(--dsw-alias-label-caption);font:inherit;font-size:16px;cursor:pointer}.dvt-paste-chip button:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.dvt-paste-chip button:disabled{opacity:.4;cursor:default}
-.dvt-provider-card{border:1px solid var(--dsw-alias-border-l1);border-radius:10px;padding:9px 10px;display:grid;gap:8px;background:var(--dsw-alias-bg-layer-2)}.dvt-provider-head{display:flex;align-items:center;gap:10px}.dvt-provider-priority{margin-left:auto;font-size:11px;color:var(--dsw-alias-label-secondary);white-space:nowrap}.dvt-provider-actions{display:flex;gap:4px}.dvt-provider-actions button{width:26px;height:26px;display:grid;place-items:center;border:1px solid var(--dsw-alias-border-l1);border-radius:7px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);cursor:pointer;font-size:14px;line-height:1}.dvt-provider-actions button:hover{background:var(--dsw-alias-interactive-bg-hover)}.dvt-provider-actions button:disabled{opacity:.35;cursor:default}
+.dvt-provider-card{border:1px solid var(--dsw-alias-border-l1);border-radius:10px;padding:9px 10px;display:grid;gap:8px;background:var(--dsw-alias-bg-layer-2)}.dvt-provider-head{display:flex;align-items:center;gap:10px}.dvt-provider-priority{margin-left:auto;font-size:11px;color:var(--dsw-alias-label-secondary);white-space:nowrap}.dvt-provider-actions{display:flex;gap:4px}.dvt-provider-actions button{width:26px;height:26px;display:grid;place-items:center;border:1px solid var(--dsw-alias-border-l1);border-radius:7px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);cursor:pointer;font-size:14px;line-height:1}.dvt-provider-actions button:hover{background:var(--dsw-alias-interactive-bg-hover)}.dvt-provider-actions button:disabled{opacity:.35;cursor:default}.dvt-provider-select{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.dvt-provider-select select{flex:1;min-width:180px;height:36px;box-sizing:border-box;border:1px solid var(--dsw-alias-border-l1);border-radius:9px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;padding:0 10px}.dvt-provider-tests{display:flex;align-items:center;gap:7px;flex-wrap:wrap}.dvt-provider-test-result{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px}.dvt-provider-test-result>div{padding:9px 10px;border-radius:9px;background:var(--dsw-alias-bg-layer-2);border-left:3px solid var(--dsw-alias-border-l4)}.dvt-provider-test-result>div[data-status=ok]{border-left-color:var(--dsw-alias-state-success-primary)}.dvt-provider-test-result>div[data-status=warning],.dvt-provider-test-result>div[data-status=not_tested]{border-left-color:var(--dsw-alias-state-warn-primary)}.dvt-provider-test-result>div[data-status=error]{border-left-color:var(--dsw-alias-state-error-primary)}.dvt-provider-test-result span{font-size:10px;text-transform:capitalize}.dvt-provider-test-result strong{float:right;font-size:9px;text-transform:uppercase;color:var(--dsw-alias-label-secondary)}.dvt-provider-test-result p{clear:both;margin:5px 0 0;font-size:10px;line-height:1.4;color:var(--dsw-alias-label-secondary)}.dvt-sorter{display:grid;gap:6px}.dvt-sorter-row{display:flex;align-items:center;gap:10px;padding:6px 8px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-2)}.dvt-sorter-index{flex:none;width:24px;height:24px;display:grid;place-items:center;border-radius:6px;background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 12%,transparent);color:var(--dsw-alias-state-business-primary);font-size:11px;font-weight:700}.dvt-sorter-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
 @media(max-width:720px){.dvt-settings-footer{display:grid}.dvt-release{width:auto}.dvt-form-grid,.dvt-update-grid{grid-template-columns:1fr}.dvt-metrics{grid-template-columns:1fr}.dvt-artifact-meta{align-items:flex-start;flex-direction:column}.dvt-panel-title{flex-direction:column}}
 `
 
