@@ -150,6 +150,8 @@ export interface CompressedImageInfo {
     height: number;
     format: 'png' | 'jpeg' | 'gif' | 'webp';
     mode: string;
+    /** True when the saved image carries an alpha (transparency) channel. */
+    hasAlpha: boolean;
     lossy: boolean;
     resized: boolean;
     candidate: string;
@@ -198,6 +200,7 @@ export declare class UpstreamAdapter {
         height: number;
         format: string;
         mode: string;
+        hasAlpha: boolean;
     }>;
     /**
      * Auto-compress one oversized image under the configured byte and pixel

@@ -7,7 +7,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis';
 import { type ArtifactDescriptor } from './artifacts.ts';
-import { type ResolvedVisionToolkitConfig } from './config.ts';
+import { type ResolvedProvider, type ResolvedVisionToolkitConfig } from './config.ts';
 import { UpstreamAdapter, type DominantColorsOutput, type UpstreamEnvironment, type UpstreamVersionInfo } from './upstream.ts';
 /** Per-invocation cancellation and timeout facts. */
 export interface Deadline {
@@ -33,6 +33,8 @@ export declare class Semaphore {
     acquire(signal: AbortSignal, permits?: number): Promise<void>;
     /** Release owned permits and wake FIFO waiters whose full weight now fits. */
     release(permits?: number): void;
+    /** Non-blocking acquisition: claim a free slot immediately, else return false. */
+    tryAcquire(permits?: number): boolean;
 }
 /** Validated image metadata retained in structured results and diagnostics. */
 export interface ImageInfo {
@@ -41,6 +43,8 @@ export interface ImageInfo {
     width: number;
     height: number;
     format: string;
+    /** True when the analyzed image carries an alpha (transparency) channel. */
+    hasAlpha: boolean;
     /** Original user-facing image path before any automatic compression. */
     originalPath: string;
 }
@@ -345,12 +349,18 @@ export declare function parseRegion(region: string): {
     x2: number;
     y2: number;
 };
+/** One enabled provider paired with its resolved upstream environment. */
+interface ResolvedProviderEnv {
+    provider: ResolvedProvider;
+    env: UpstreamEnvironment;
+}
 /** Runtime facade used by every native tool. */
 export declare class VisionToolkitRuntime {
     private readonly ctx;
     private readonly config;
     private readonly semaphores;
     private readonly glanceCache;
+    private readonly providerGates;
     private readonly adapter;
     constructor(ctx: Context, config: ResolvedVisionToolkitConfig, adapter?: UpstreamAdapter);
     /** Pinned and prepared upstream identity. */
@@ -363,17 +373,41 @@ export declare class VisionToolkitRuntime {
     private operationError;
     private semaphore;
     private runOperation;
-    /** Resolve the configured credential at the remote-operation boundary. */
+    /** Highest-priority enabled provider, falling back to the first entry. */
+    private get primaryProvider();
+    /** Build the upstream environment for one resolved provider. */
+    private providerEnv;
+    /** Resolve one provider's credential into its environment, or undefined when unavailable. */
+    private resolveProviderEnv;
+    /** Resolve every enabled provider in priority order, skipping unreadable credentials. */
+    resolveProviderPool(): Promise<ResolvedProviderEnv[]>;
+    /** Resolve the primary provider's credential at the remote-operation boundary. */
     resolveVisionEnv(): Promise<UpstreamEnvironment>;
-    private visionEnv;
     private pathPolicy;
     private compressedImageRoot;
     private readCacheCandidate;
     private cacheEntryOutDigest;
     private pruneCompressedCache;
     private autoCompressImage;
+    /** Validate one image against the configured global limits (used by local tools). */
     private validateImage;
     private accountImage;
+    /** Stable gate key for one provider's in-flight request cap. */
+    private providerGate;
+    /**
+     * Prepare one image for an online vision request against the enabled
+     * provider pool. The raw image is kept when at least one enabled provider
+     * accepts it; otherwise it is compressed once to the first (highest
+     * priority) provider's limits so the priority route can proceed.
+     */
+    private prepareVisionImage;
+    /**
+     * Run one online-vision upstream command across the enabled provider pool in
+     * priority order. A provider is skipped when its size limits or concurrency
+     * are exhausted, retried up to its attempt count, and the next provider
+     * takes over on failure. Throws once every provider has failed.
+     */
+    private runVisionWithFailover;
     private glanceCacheKey;
     private runUpstream;
     private probeGeneratedImage;
@@ -409,4 +443,5 @@ export declare class VisionToolkitRuntime {
     /** Prepared Python command. */
     python(): string;
 }
+export {};
 //# sourceMappingURL=runtime.d.ts.map

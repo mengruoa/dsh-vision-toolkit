@@ -9,7 +9,18 @@ declare const en: {
     readonly settingsIntro: "Configure the pinned visual engineering runtime, its external vision endpoint, and local safety limits.";
     readonly externalNotice: "Remote tools send the selected image bytes to the configured external vision API. Local crop, trace, pixel diff, palette, foreground extraction, and HTML rendering do not upload images.";
     readonly provider: "Vision service";
-    readonly providerHint: "Choose the API protocol, then provide the service address, model, and API key used by online vision features.";
+    readonly providerHint: "Add multiple API endpoints and order them by failover priority. A failed or rate-limited request automatically moves to the next provider; when every provider fails, the request reports an error.";
+    readonly providers: "Vision providers";
+    readonly name: "Label";
+    readonly enabled: "Enabled";
+    readonly priority: "Priority {index}";
+    readonly attempts: "Attempts";
+    readonly attemptsHint: "Total attempts against this provider before failing over to the next one.";
+    readonly addProvider: "Add provider";
+    readonly moveUp: "Move up";
+    readonly moveDown: "Move down";
+    readonly removeProvider: "Remove";
+    readonly primaryKeyHint: "The API key field above stores the key for the first provider; additional providers use their own credential names.";
     readonly aihubmixTutorial: "Need an AIHubMix key for free Gemini 3.7 Flash vision? Follow the signup guide →";
     readonly baseUrl: "Base URL";
     readonly apiKey: "API key";
@@ -222,6 +233,20 @@ interface HealthResult {
     connectionTested: boolean;
     modelTested: boolean;
 }
+interface ProviderValue {
+    name?: string;
+    enabled?: boolean;
+    baseUrl?: string;
+    credential?: string;
+    model?: string;
+    protocol?: 'openai' | 'anthropic';
+    anthropicThinking?: 'omit' | 'disabled' | 'adaptive';
+    userAgent?: string;
+    maxImageBytes?: number;
+    maxImagePixels?: number;
+    concurrency?: number;
+    attempts?: number;
+}
 interface SettingsValue {
     provider?: {
         baseUrl?: string;
@@ -231,6 +256,7 @@ interface SettingsValue {
         anthropicThinking?: 'omit' | 'disabled' | 'adaptive';
         userAgent?: string;
     };
+    providers?: ProviderValue[];
     language?: 'zh' | 'en';
     timeoutMs?: number;
     maxImageBytes?: number;

@@ -12,6 +12,33 @@ export { BUILT_IN_FREE_VISION_BASE_URL, BUILT_IN_FREE_VISION_CREDENTIAL, BUILT_I
 export declare const VISION_TOOLKIT_SETTINGS_NAMESPACE: import("@deepseek-ai/dsh-settings").SettingsNamespace;
 /** Browser-compatible default shared with the vendored Python client. */
 export declare const DEFAULT_VISION_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+/** One online vision provider in the failover pool. */
+export interface VisionProviderConfig {
+    /** Display label shown in Settings; defaults to the model name. */
+    name?: string;
+    /** Whether this provider participates in the failover pool (default true). */
+    enabled?: boolean;
+    /** Provider API base URL. */
+    baseUrl?: string;
+    /** DSH Credential reference holding the API key (an environment-style name). */
+    credential?: string;
+    /** Multimodal model name. */
+    model?: string;
+    /** Vision request protocol: OpenAI Chat Completions or Anthropic Messages. */
+    protocol?: 'openai' | 'anthropic';
+    /** Anthropic thinking field behavior; `omit` leaves model defaults untouched. */
+    anthropicThinking?: 'omit' | 'disabled' | 'adaptive';
+    /** Outbound User-Agent for provider requests and connection tests. */
+    userAgent?: string;
+    /** Per-provider maximum input image bytes; larger images skip to a later provider or are compressed. */
+    maxImageBytes?: number;
+    /** Per-provider maximum decoded pixel count per input image. */
+    maxImagePixels?: number;
+    /** Per-provider in-flight request cap; an exhausted provider is skipped in favor of the next one. */
+    concurrency?: number;
+    /** Total attempts against this provider before failing over to the next one (default 3). */
+    attempts?: number;
+}
 /** Full user-facing configuration; every field defaults at the schema boundary. */
 export interface VisionToolkitConfig {
     provider?: {
@@ -28,6 +55,8 @@ export interface VisionToolkitConfig {
         /** Outbound User-Agent for provider requests and connection tests. */
         userAgent?: string;
     };
+    /** Ordered online vision providers; array order is the failover priority. */
+    providers?: VisionProviderConfig[];
     /** Vision output language (`zh` or `en`). */
     language?: 'zh' | 'en';
     /** Single remote/upstream call budget in milliseconds. */
@@ -81,6 +110,21 @@ export interface VisionToolkitConfig {
 }
 /** Configuration schema with the documented P0 defaults. */
 export declare const Config: Schema<VisionToolkitConfig>;
+/** One resolved online vision provider, with every default materialized. */
+export interface ResolvedProvider {
+    name: string;
+    enabled: boolean;
+    baseUrl: string;
+    credential: CredentialRef;
+    model: string;
+    protocol: 'openai' | 'anthropic';
+    anthropicThinking: 'omit' | 'disabled' | 'adaptive';
+    userAgent: string;
+    maxImageBytes: number;
+    maxImagePixels: number;
+    concurrency: number;
+    attempts: number;
+}
 /** Configuration after static validation, with every default materialized. */
 export interface ResolvedVisionToolkitConfig {
     provider: {
@@ -91,6 +135,8 @@ export interface ResolvedVisionToolkitConfig {
         anthropicThinking: 'omit' | 'disabled' | 'adaptive';
         userAgent: string;
     };
+    /** Ordered failover pool; array order is the priority, highest first. */
+    providers: ResolvedProvider[];
     language: 'zh' | 'en';
     timeoutMs: number;
     maxImageBytes: number;
