@@ -74,6 +74,16 @@ export declare class ImageInputVariantAdapter extends LlmAdapter {
     providerRetryPolicy(_provider: string): ResolvedRetryPolicy;
     listModels(provider: string): Promise<readonly LlmModelInfo[]>;
     resolveModel(provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo>;
+    /**
+     * Prepare one model call through this variant generation. Newer host
+     * `LlmAdapter` contracts call this before dispatch; mirror the base
+     * implementation so the variant route works with any installed dsh-llm
+     * version (older bases do not declare the method, hence no `override`).
+     */
+    prepareCall(provider: string, model: string, signal?: AbortSignal): Promise<{
+        readonly model: LlmResolvedModelInfo;
+        stream(options: GenerateOptions): AsyncIterable<StreamChunk>;
+    }>;
     stream(options: GenerateOptions): AsyncGenerator<StreamChunk>;
 }
 /**

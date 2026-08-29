@@ -4,6 +4,12 @@ All notable user-facing changes to DSH Vision Toolkit are documented in this fil
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-29
+
+### Added
+
+- Added `prepareCall` to the image-input variant adapter so the variant route works with any installed `dsh-llm` version (newer host contracts call it before dispatch).
+
 ## [0.1.0] - 2026-08-29
 
 ### Added

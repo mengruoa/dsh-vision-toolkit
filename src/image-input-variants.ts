@@ -567,6 +567,26 @@ export class ImageInputVariantAdapter extends LlmAdapter {
     }
   }
 
+  /**
+   * Prepare one model call through this variant generation. Newer host
+   * `LlmAdapter` contracts call this before dispatch; mirror the base
+   * implementation so the variant route works with any installed dsh-llm
+   * version (older bases do not declare the method, hence no `override`).
+   */
+  async prepareCall(
+    provider: string,
+    model: string,
+    signal?: AbortSignal,
+  ): Promise<{
+    readonly model: LlmResolvedModelInfo
+    stream(options: GenerateOptions): AsyncIterable<StreamChunk>
+  }> {
+    return {
+      model: await this.resolveModel(provider, model, signal),
+      stream: options => this.stream(options),
+    }
+  }
+
   override async *stream(options: GenerateOptions): AsyncGenerator<StreamChunk> {
     const current = this.runtime()
     let captured: CapturedEvidenceRuntime | undefined
