@@ -4,6 +4,12 @@ All notable user-facing changes to DSH Vision Toolkit are documented in this fil
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-09-01
+
+### Fixed
+
+- Synced upstream updates and fixed a startup compatibility issue under DSH `0.1.2-alpha`: the `settingsNamespace` export was removed from `@deepseek-ai/dsh-settings` in that version, and importing a missing named export is a module-evaluation error that stops the host from booting. The settings namespace check is now inlined (a static string validated against the namespace pattern) instead of importing the removed helper, so the plugin loads on both `0.1.0-rc.6` and `0.1.2-alpha`.
+
 ## [0.1.1] - 2026-08-29
 
 ### Added
