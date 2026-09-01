@@ -33,8 +33,10 @@ export interface VisionProviderConfig {
     anthropicThinking?: 'omit' | 'disabled' | 'adaptive';
     /** Outbound User-Agent for provider requests and connection tests. */
     userAgent?: string;
-    /** Per-provider single request timeout in milliseconds. */
-    timeoutMs?: number;
+    /** t1: per-request hedge threshold in seconds. A single request exceeding t1 keeps running while the next provider starts in parallel. */
+    t1Seconds?: number;
+    /** t2: per-provider cumulative cutoff in seconds. Total accumulated request time reaching t2 terminates the provider. */
+    t2Seconds?: number;
     /** Per-provider maximum input image bytes; larger images skip to a later provider or are compressed. */
     maxImageBytes?: number;
     /** Per-provider maximum decoded pixel count per input image. */
@@ -64,13 +66,17 @@ export interface VisionToolkitConfig {
     providers?: VisionProviderConfig[];
     /** Vision output language (`zh` or `en`). */
     language?: 'zh' | 'en';
-    /** Single remote/upstream call budget in milliseconds. */
-    timeoutMs?: number;
+    /** Global hard timeout in seconds for one tool invocation; the call never exceeds it. */
+    hardTimeoutSeconds?: number;
+    /** Per-session cap on concurrent tool operations (default 6). */
+    sessionMaxConcurrency?: number;
+    /** Minimum remaining budget in seconds required before issuing a new request (default 20). */
+    minAvailableSeconds?: number;
     /** Maximum input image size in bytes; larger images are auto-compressed (lossless first). */
     maxImageBytes?: number;
     /** Maximum decoded pixel count per input image; larger images are auto-downscaled to fit. */
     maxImagePixels?: number;
-    /** In-flight tool execution cap per session. */
+    /** Default per-model in-flight request cap inherited by providers that do not set their own. */
     concurrency?: number;
     runtime?: {
         /** `managed` uses the packaged snapshot and isolated venv; `external` uses a clean pinned checkout. */
@@ -127,7 +133,8 @@ export interface ResolvedProvider {
     protocol: 'openai' | 'anthropic';
     anthropicThinking: 'omit' | 'disabled' | 'adaptive';
     userAgent: string;
-    timeoutMs: number;
+    t1Seconds: number;
+    t2Seconds: number;
     maxImageBytes: number;
     maxImagePixels: number;
     concurrency: number;
@@ -146,7 +153,9 @@ export interface ResolvedVisionToolkitConfig {
     /** Ordered failover pool; array order is the priority, highest first. */
     providers: ResolvedProvider[];
     language: 'zh' | 'en';
-    timeoutMs: number;
+    hardTimeoutSeconds: number;
+    sessionMaxConcurrency: number;
+    minAvailableSeconds: number;
     maxImageBytes: number;
     maxImagePixels: number;
     concurrency: number;

@@ -272,7 +272,7 @@ function fixturePatch(home: string, visionBaseUrl: string): string {
     '      credential: VISION_API_KEY',
     '      model: fixture-model',
     '    language: en',
-    '    timeoutMs: 60000',
+    '    hardTimeoutSeconds: 120',
     '    maxImageBytes: 10485760',
     '    maxImagePixels: 40000000',
     '    concurrency: 4',

@@ -77,8 +77,10 @@ export interface VisionProviderConfig {
   anthropicThinking?: 'omit' | 'disabled' | 'adaptive'
   /** Outbound User-Agent for provider requests and connection tests. */
   userAgent?: string
-  /** Per-provider single request timeout in milliseconds. */
-  timeoutMs?: number
+  /** t1: per-request hedge threshold in seconds. A single request exceeding t1 keeps running while the next provider starts in parallel. */
+  t1Seconds?: number
+  /** t2: per-provider cumulative cutoff in seconds. Total accumulated request time reaching t2 terminates the provider. */
+  t2Seconds?: number
   /** Per-provider maximum input image bytes; larger images skip to a later provider or are compressed. */
   maxImageBytes?: number
   /** Per-provider maximum decoded pixel count per input image. */
@@ -109,13 +111,17 @@ export interface VisionToolkitConfig {
   providers?: VisionProviderConfig[]
   /** Vision output language (`zh` or `en`). */
   language?: 'zh' | 'en'
-  /** Single remote/upstream call budget in milliseconds. */
-  timeoutMs?: number
+  /** Global hard timeout in seconds for one tool invocation; the call never exceeds it. */
+  hardTimeoutSeconds?: number
+  /** Per-session cap on concurrent tool operations (default 6). */
+  sessionMaxConcurrency?: number
+  /** Minimum remaining budget in seconds required before issuing a new request (default 20). */
+  minAvailableSeconds?: number
   /** Maximum input image size in bytes; larger images are auto-compressed (lossless first). */
   maxImageBytes?: number
   /** Maximum decoded pixel count per input image; larger images are auto-downscaled to fit. */
   maxImagePixels?: number
-  /** In-flight tool execution cap per session. */
+  /** Default per-model in-flight request cap inherited by providers that do not set their own. */
   concurrency?: number
   runtime?: {
     /** `managed` uses the packaged snapshot and isolated venv; `external` uses a clean pinned checkout. */
@@ -179,14 +185,17 @@ export const Config: Schema<VisionToolkitConfig> = z.object({
     protocol: z.union(['openai', 'anthropic'] as const).default('openai'),
     anthropicThinking: z.union(['omit', 'disabled', 'adaptive'] as const).default('omit'),
     userAgent: z.string(),
-    timeoutMs: z.number(),
+    t1Seconds: z.number(),
+    t2Seconds: z.number(),
     maxImageBytes: z.number(),
     maxImagePixels: z.number(),
     concurrency: z.number(),
     attempts: z.number(),
   })).default([]),
   language: z.union(['zh', 'en'] as const).default('zh'),
-  timeoutMs: z.number().default(30000),
+  hardTimeoutSeconds: z.number().default(180),
+  sessionMaxConcurrency: z.number().default(6),
+  minAvailableSeconds: z.number().default(20),
   maxImageBytes: z.number().default(4194304),
   maxImagePixels: z.number().default(20000000),
   concurrency: z.number().default(4),
@@ -216,7 +225,8 @@ export interface ResolvedProvider {
   protocol: 'openai' | 'anthropic'
   anthropicThinking: 'omit' | 'disabled' | 'adaptive'
   userAgent: string
-  timeoutMs: number
+  t1Seconds: number
+  t2Seconds: number
   maxImageBytes: number
   maxImagePixels: number
   concurrency: number
@@ -236,7 +246,9 @@ export interface ResolvedVisionToolkitConfig {
   /** Ordered failover pool; array order is the priority, highest first. */
   providers: ResolvedProvider[]
   language: 'zh' | 'en'
-  timeoutMs: number
+  hardTimeoutSeconds: number
+  sessionMaxConcurrency: number
+  minAvailableSeconds: number
   maxImageBytes: number
   maxImagePixels: number
   concurrency: number
@@ -254,7 +266,7 @@ export interface ResolvedVisionToolkitConfig {
   }
 }
 
-const MAX_TIMEOUT_MS = 600000
+const MAX_TIMEOUT_SECONDS = 600
 const MAX_IMAGE_BYTES = 268435456
 const MAX_IMAGE_PIXELS = 268435456
 const MAX_CONCURRENCY = 16
@@ -264,7 +276,6 @@ const DEFAULT_PROVIDER_ATTEMPTS = 3
 
 /** Global limits a provider inherits when it does not set its own. */
 interface ProviderDefaults {
-  timeoutMs: number
   maxImageBytes: number
   maxImagePixels: number
   concurrency: number
@@ -343,9 +354,13 @@ function resolveProvider(
   if (userAgent.length === 0) {
     throw new VisionToolkitError('config', `${label}.userAgent must not be empty`)
   }
-  const timeoutMs = input.timeoutMs ?? defaults.timeoutMs
-  if (!Number.isInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > MAX_TIMEOUT_MS) {
-    throw new VisionToolkitError('config', `${label}.timeoutMs must be an integer between 1000 and ${MAX_TIMEOUT_MS}`)
+  const t1Seconds = input.t1Seconds ?? 90
+  if (!Number.isInteger(t1Seconds) || t1Seconds < 1 || t1Seconds > MAX_TIMEOUT_SECONDS) {
+    throw new VisionToolkitError('config', `${label}.t1Seconds must be an integer between 1 and ${MAX_TIMEOUT_SECONDS}`)
+  }
+  const t2Seconds = input.t2Seconds ?? 90
+  if (!Number.isInteger(t2Seconds) || t2Seconds < 1 || t2Seconds > MAX_TIMEOUT_SECONDS) {
+    throw new VisionToolkitError('config', `${label}.t2Seconds must be an integer between 1 and ${MAX_TIMEOUT_SECONDS}`)
   }
   const maxImageBytes = input.maxImageBytes ?? defaults.maxImageBytes
   if (!Number.isInteger(maxImageBytes) || maxImageBytes < 1024 || maxImageBytes > MAX_IMAGE_BYTES) {
@@ -375,7 +390,8 @@ function resolveProvider(
     protocol,
     anthropicThinking,
     userAgent,
-    timeoutMs,
+    t1Seconds,
+    t2Seconds,
     maxImageBytes,
     maxImagePixels,
     concurrency,
@@ -397,9 +413,17 @@ export function resolveConfig(config: VisionToolkitConfig = {}): ResolvedVisionT
   if (language !== 'zh' && language !== 'en') {
     throw new VisionToolkitError('config', 'language must be "zh" or "en"')
   }
-  const timeoutMs = config.timeoutMs ?? 30000
-  if (!Number.isInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > MAX_TIMEOUT_MS) {
-    throw new VisionToolkitError('config', `timeoutMs must be an integer between 1000 and ${MAX_TIMEOUT_MS}`)
+  const hardTimeoutSeconds = config.hardTimeoutSeconds ?? 180
+  if (!Number.isInteger(hardTimeoutSeconds) || hardTimeoutSeconds < 1 || hardTimeoutSeconds > MAX_TIMEOUT_SECONDS) {
+    throw new VisionToolkitError('config', `hardTimeoutSeconds must be an integer between 1 and ${MAX_TIMEOUT_SECONDS}`)
+  }
+  const sessionMaxConcurrency = config.sessionMaxConcurrency ?? 6
+  if (!Number.isInteger(sessionMaxConcurrency) || sessionMaxConcurrency < 1 || sessionMaxConcurrency > MAX_CONCURRENCY) {
+    throw new VisionToolkitError('config', `sessionMaxConcurrency must be an integer between 1 and ${MAX_CONCURRENCY}`)
+  }
+  const minAvailableSeconds = config.minAvailableSeconds ?? 20
+  if (!Number.isInteger(minAvailableSeconds) || minAvailableSeconds < 1 || minAvailableSeconds > MAX_TIMEOUT_SECONDS) {
+    throw new VisionToolkitError('config', `minAvailableSeconds must be an integer between 1 and ${MAX_TIMEOUT_SECONDS}`)
   }
   const maxImageBytes = config.maxImageBytes ?? 4194304
   if (!Number.isInteger(maxImageBytes) || maxImageBytes < 1024 || maxImageBytes > MAX_IMAGE_BYTES) {
@@ -436,7 +460,7 @@ export function resolveConfig(config: VisionToolkitConfig = {}): ResolvedVisionT
   const variantProviders = (imageInputVariants.providers ?? [])
     .map(provider => provider.trim())
     .filter(provider => provider.length > 0)
-  const providerDefaults: ProviderDefaults = { timeoutMs, maxImageBytes, maxImagePixels, concurrency }
+  const providerDefaults: ProviderDefaults = { maxImageBytes, maxImagePixels, concurrency }
   const configuredProviders = config.providers ?? []
   if (configuredProviders.length > MAX_PROVIDERS) {
     throw new VisionToolkitError('config', `providers must have at most ${MAX_PROVIDERS} entries`)
@@ -457,7 +481,9 @@ export function resolveConfig(config: VisionToolkitConfig = {}): ResolvedVisionT
     },
     providers,
     language,
-    timeoutMs,
+    hardTimeoutSeconds,
+    sessionMaxConcurrency,
+    minAvailableSeconds,
     maxImageBytes,
     maxImagePixels,
     concurrency,

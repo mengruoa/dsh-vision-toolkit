@@ -186,7 +186,7 @@ describe('VisionToolkitWebBackend', () => {
     const { manager, activated, post } = await setup()
     const value = {
       provider: { baseUrl: 'https://vision.example/v1', credential: 'VISION_API_KEY', model: 'next-model' },
-      language: 'en', timeoutMs: 45000, maxImageBytes: 1000000, maxImagePixels: 2000000,
+      language: 'en', hardTimeoutSeconds: 120, maxImageBytes: 1000000, maxImagePixels: 2000000,
       concurrency: 2, runtime: { mode: 'managed' }, allowedDirs: [],
     }
     const first = await post({ action: 'save', expectedRevision: 0, value })
@@ -210,7 +210,7 @@ describe('VisionToolkitWebBackend', () => {
         baseUrl: 'https://vision.example/v1', credential: 'VISION_API_KEY', model: 'next-model',
         protocol: 'openai' as const,
       },
-      language: 'en' as const, timeoutMs: 45000, maxImageBytes: 1000000, maxImagePixels: 2000000,
+      language: 'en' as const, hardTimeoutSeconds: 120, maxImageBytes: 1000000, maxImagePixels: 2000000,
       concurrency: 2, runtime: { mode: 'managed' as const }, allowedDirs: [],
     }
     const saved = await post({ action: 'save', expectedRevision: 0, value })

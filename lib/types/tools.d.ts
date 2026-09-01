@@ -19,6 +19,7 @@ export declare const VISION_TOOL_NAMES: {
     readonly extractForeground: "vision_extract_foreground";
     readonly dominantColors: "vision_dominant_colors";
     readonly htmlScreenshot: "vision_html_screenshot";
+    readonly concurrency: "vision_concurrency";
 };
 /** Runtime lookup accepted by tools so Settings can atomically swap generations. */
 export type VisionToolkitRuntimeSource = VisionToolkitRuntime | (() => VisionToolkitRuntime);

@@ -20,7 +20,9 @@ describe('resolveConfig', () => {
     expect(config.provider.anthropicThinking).toBe('omit')
     expect(config.provider.userAgent).toBe(DEFAULT_VISION_USER_AGENT)
     expect(config.language).toBe('zh')
-    expect(config.timeoutMs).toBe(30000)
+    expect(config.hardTimeoutSeconds).toBe(180)
+    expect(config.sessionMaxConcurrency).toBe(6)
+    expect(config.minAvailableSeconds).toBe(20)
     expect(config.maxImageBytes).toBe(4194304)
     expect(config.maxImagePixels).toBe(20000000)
     expect(isBuiltInFreeVisionProvider(config.provider)).toBe(true)
@@ -110,7 +112,9 @@ describe('resolveConfig', () => {
 
   it('rejects unsupported language and limits', () => {
     expect(() => resolveConfig({ language: 'fr' as 'zh' })).toThrowError(/language/)
-    expect(() => resolveConfig({ timeoutMs: 500 })).toThrowError(/timeoutMs/)
+    expect(() => resolveConfig({ hardTimeoutSeconds: 0 })).toThrowError(/hardTimeoutSeconds/)
+    expect(() => resolveConfig({ sessionMaxConcurrency: 0 })).toThrowError(/sessionMaxConcurrency/)
+    expect(() => resolveConfig({ minAvailableSeconds: 0 })).toThrowError(/minAvailableSeconds/)
     expect(() => resolveConfig({ maxImageBytes: 1 })).toThrowError(/maxImageBytes/)
     expect(() => resolveConfig({ maxImagePixels: 0 })).toThrowError(/maxImagePixels/)
     expect(() => resolveConfig({ concurrency: 0 })).toThrowError(/concurrency/)
@@ -144,6 +148,7 @@ describe('resolveConfig providers', () => {
     expect(a).toMatchObject({
       name: 'A', enabled: true, baseUrl: 'https://a.example/v1', model: 'model-a',
       maxImageBytes: 1048576, maxImagePixels: 8000000, concurrency: 6, attempts: 3,
+      t1Seconds: 90, t2Seconds: 90,
     })
     expect(b).toMatchObject({ name: 'B', attempts: 5, concurrency: 2, enabled: true })
     expect(config.provider.baseUrl).toBe('https://a.example/v1')

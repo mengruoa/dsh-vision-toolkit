@@ -4,6 +4,20 @@ All notable user-facing changes to DSH Vision Toolkit are documented in this fil
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-09-01
+
+### Added
+
+- Hedge-based failover across the enabled vision providers: when a single request crosses a provider's `t1Seconds` threshold it keeps running while the next provider starts in parallel, and a provider whose cumulative request time reaches `t2Seconds` is terminated; the result always prefers the highest-priority provider.
+- Rate-limited (HTTP 429) providers are parked and revisited at a 10-second cadence once every other provider is exhausted, instead of being treated as a terminal failure.
+- New `vision_concurrency` tool that reports live concurrency: per-session available/max/in-use/free slots plus a per-model free-slot breakdown.
+- New timeout & concurrency settings that replace `timeoutMs`: per-provider `t1Seconds`/`t2Seconds` and global `hardTimeoutSeconds`, `sessionMaxConcurrency`, and `minAvailableSeconds`. The per-session gate now rejects excess concurrent calls immediately instead of queueing.
+
+### Changed
+
+- Renamed the per-call override on every vision tool from `timeoutMs` (milliseconds) to `timeoutSeconds` (seconds, 1–600) and updated tool descriptions with the session concurrency note.
+- Added a new `rate_limit` error category for HTTP 429 responses.
+
 ## [0.1.2] - 2026-09-01
 
 ### Fixed

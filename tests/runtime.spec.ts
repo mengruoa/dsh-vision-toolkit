@@ -240,15 +240,15 @@ describe('VisionToolkitRuntime', () => {
     const run = vi.spyOn(adapter, 'run')
       .mockResolvedValueOnce({
         stdout: '',
-        stderr: 'HTTP 429 fixture limit',
-        stdoutTruncated: false,
+        stderr: '',
+        stdoutTruncated: true,
         stderrTruncated: false,
-        outcome: { exitCode: 1, signal: null },
+        outcome: { exitCode: 0, signal: null },
       })
       .mockImplementation(originalRun)
     const options = { signal, workspace, sessionId: 'retry', sessionScope: {} }
 
-    await expect(runtime.glance({ images: ['sample.png'] }, options)).rejects.toMatchObject({ code: 'service' })
+    await expect(runtime.glance({ images: ['sample.png'] }, options)).rejects.toMatchObject({ code: 'output' })
     await expect(runtime.glance({ images: ['sample.png'] }, options)).resolves.toMatchObject({ answer: 'Fixture detailed description' })
     expect(run).toHaveBeenCalledTimes(2)
   })
@@ -529,7 +529,7 @@ describe('VisionToolkitRuntime', () => {
       .rejects.toMatchObject({ code: 'cancelled' })
     await expect(runtime.glance(
       { images: ['sample.png'], query: '__sleep__' },
-      { signal, workspace, timeoutMs: 1000 },
+      { signal, workspace, timeoutSeconds: 1 },
     )).rejects.toMatchObject({ code: 'timeout' })
   })
 
@@ -966,19 +966,27 @@ class TrackingAdapter extends UpstreamAdapter {
 }
 
 describe('session-scoped concurrency', () => {
-  it('serializes one session while allowing independent sessions to overlap', async () => {
-    const { ctx, config } = await setup({ concurrency: 1 })
+  it('rejects a concurrent call that exceeds the per-session cap', async () => {
+    const { ctx, config } = await setup({ sessionMaxConcurrency: 1 })
+    const adapter = new TrackingAdapter(ctx, config, preparedFixture())
+    adapter.delayMs = 120
+    const runtime = new VisionToolkitRuntime(ctx, config, adapter)
+    const workspace = await tempWorkspace()
+
+    const first = runtime.glance({ images: ['sample.png'] }, { signal, workspace, sessionId: 'same' })
+    await vi.waitFor(() => expect(adapter.active).toBe(1))
+    await expect(runtime.glance({ images: ['sample.png'] }, { signal, workspace, sessionId: 'same' }))
+      .rejects.toMatchObject({ code: 'capacity' })
+    await expect(first).resolves.toMatchObject({ answer: 'tracked' })
+    expect(adapter.maxActive).toBe(1)
+  })
+
+  it('allows independent sessions to overlap', async () => {
+    const { ctx, config } = await setup({ sessionMaxConcurrency: 2 })
     const adapter = new TrackingAdapter(ctx, config, preparedFixture())
     const runtime = new VisionToolkitRuntime(ctx, config, adapter)
     const workspace = await tempWorkspace()
 
-    await Promise.all([
-      runtime.glance({ images: ['sample.png'] }, { signal, workspace, sessionId: 'same' }),
-      runtime.glance({ images: ['sample.png'] }, { signal, workspace, sessionId: 'same' }),
-    ])
-    expect(adapter.maxActive).toBe(1)
-
-    adapter.maxActive = 0
     await Promise.all([
       runtime.glance({ images: ['sample.png'] }, { signal, workspace, sessionId: 'one' }),
       runtime.glance({ images: ['sample.png'] }, { signal, workspace, sessionId: 'two' }),
@@ -986,45 +994,85 @@ describe('session-scoped concurrency', () => {
     expect(adapter.maxActive).toBe(2)
   })
 
-  it('starts a fresh execution timeout after a queued operation acquires its slot', async () => {
-    const { ctx, config } = await setup({ concurrency: 1 })
-    const adapter = new TrackingAdapter(ctx, config, preparedFixture())
-    adapter.delayMs = 650
+  it('reports the live available concurrency for the calling session', async () => {
+    const { ctx, config } = await setup({ sessionMaxConcurrency: 6, concurrency: 4 })
+    const runtime = new VisionToolkitRuntime(ctx, config, new TrackingAdapter(ctx, config, preparedFixture()))
+    const status = runtime.concurrencyStatus({ signal, workspace: '/tmp', sessionId: 's' })
+    expect(status.sessionMax).toBe(6)
+    expect(status.sessionFree).toBe(6)
+    expect(status.modelFree).toBe(4)
+    expect(status.available).toBe(4)
+    expect(status.models).toEqual([{ name: 'fixture-model', concurrency: 4, inUse: 0, free: 4 }])
+  })
+})
+
+class ScriptedAdapter extends UpstreamAdapter {
+  readonly behaviors = new Map<string, () => Promise<UpstreamRunResult>>()
+
+  override probeImageSize(): Promise<{ width: number; height: number; format: string; mode: string; hasAlpha: boolean }> {
+    return Promise.resolve({ width: 256, height: 256, format: 'png', mode: 'RGB', hasAlpha: false })
+  }
+
+  override async run(
+    _tool: UpstreamTool,
+    _args: readonly string[],
+    options: { signal: AbortSignal; env?: UpstreamEnvironment },
+  ): Promise<UpstreamRunResult> {
+    const behavior = this.behaviors.get(options.env?.VISION_MODEL ?? 'default')
+    if (behavior !== undefined) return behavior()
+    return {
+      stdout: 'default-answer\n',
+      stderr: '',
+      stdoutTruncated: false,
+      stderrTruncated: false,
+      outcome: { exitCode: 0, signal: null },
+    }
+  }
+}
+
+describe('hedge-based failover', () => {
+  it('parks a 429 provider and returns the next provider result', async () => {
+    const { ctx, config } = await setup({
+      providers: [
+        { name: 'A', baseUrl: 'https://a.example/v1', credential: 'KEY_A', model: 'model-a' },
+        { name: 'B', baseUrl: 'https://b.example/v1', credential: 'KEY_B', model: 'model-b' },
+      ],
+    })
+    const adapter = new ScriptedAdapter(ctx, config, preparedFixture())
+    adapter.behaviors.set('model-a', () => Promise.resolve({
+      stdout: '', stderr: 'HTTP 429 fixture limit', stdoutTruncated: false, stderrTruncated: false, outcome: { exitCode: 1, signal: null },
+    }))
+    adapter.behaviors.set('model-b', () => Promise.resolve({
+      stdout: 'answer-from-b\n', stderr: '', stdoutTruncated: false, stderrTruncated: false, outcome: { exitCode: 0, signal: null },
+    }))
     const runtime = new VisionToolkitRuntime(ctx, config, adapter)
     const workspace = await tempWorkspace()
 
-    await expect(Promise.all([
-      runtime.glance(
-        { images: ['sample.png'] },
-        { signal, workspace, sessionId: 'same', timeoutMs: 1000 },
-      ),
-      runtime.glance(
-        { images: ['sample.png'] },
-        { signal, workspace, sessionId: 'same', timeoutMs: 1000 },
-      ),
-    ])).resolves.toHaveLength(2)
+    const result = await runtime.glance({ images: ['sample.png'] }, { signal, workspace })
+    expect(result.answer).toBe('answer-from-b')
   })
 
-  it('reports queue timeout separately from the execution deadline', async () => {
-    const { ctx, config } = await setup({ concurrency: 1 })
-    const adapter = new TrackingAdapter(ctx, config, preparedFixture())
-    adapter.delayMs = 1_200
+  it('prefers the higher-priority provider result when a lower-priority provider finishes first', async () => {
+    const { ctx, config } = await setup({
+      minAvailableSeconds: 1,
+      providers: [
+        { name: 'A', baseUrl: 'https://a.example/v1', credential: 'KEY_A', model: 'model-a', t1Seconds: 1, t2Seconds: 5 },
+        { name: 'B', baseUrl: 'https://b.example/v1', credential: 'KEY_B', model: 'model-b' },
+      ],
+    })
+    const adapter = new ScriptedAdapter(ctx, config, preparedFixture())
+    adapter.behaviors.set('model-a', async () => {
+      await new Promise(resolve => setTimeout(resolve, 3000))
+      return { stdout: 'answer-from-a\n', stderr: '', stdoutTruncated: false, stderrTruncated: false, outcome: { exitCode: 0, signal: null } }
+    })
+    adapter.behaviors.set('model-b', () => Promise.resolve({
+      stdout: 'answer-from-b\n', stderr: '', stdoutTruncated: false, stderrTruncated: false, outcome: { exitCode: 0, signal: null },
+    }))
     const runtime = new VisionToolkitRuntime(ctx, config, adapter)
     const workspace = await tempWorkspace()
 
-    const first = runtime.glance(
-      { images: ['sample.png'] },
-      { signal, workspace, sessionId: 'same', timeoutMs: 2000 },
-    )
-    await vi.waitFor(() => expect(adapter.active).toBe(1))
-    await expect(runtime.glance(
-      { images: ['sample.png'] },
-      { signal, workspace, sessionId: 'same', timeoutMs: 1000 },
-    )).rejects.toMatchObject({
-      code: 'timeout',
-      message: 'vision_glance: timed out while waiting for a concurrency slot',
-    })
-    await expect(first).resolves.toMatchObject({ answer: 'tracked' })
+    const result = await runtime.glance({ images: ['sample.png'] }, { signal, workspace })
+    expect(result.answer).toBe('answer-from-a')
   })
 })
 

@@ -17,7 +17,7 @@ import { describeArtifact, type ArtifactDescriptor } from './artifacts.ts'
 import { isBuiltInFreeVisionProvider, type ResolvedProvider, type ResolvedVisionToolkitConfig } from './config.ts'
 import { BUILT_IN_FREE_VISION_KEY } from './defaults.ts'
 import { evidenceRuntimeFingerprint } from './evidence-cache.ts'
-import { VisionToolkitError } from './errors.ts'
+import { VisionToolkitError, type VisionToolkitErrorCode } from './errors.ts'
 import {
   assertDistinctOutput,
   commitStagedDirectory,
@@ -152,6 +152,11 @@ export class Semaphore {
   /** Whether no active or queued caller still owns this gate. */
   get idle(): boolean {
     return this.active === 0 && this.waiters.length === 0
+  }
+
+  /** Free slots still claimable without queuing. */
+  get available(): number {
+    return Math.max(0, this.limit - this.active)
   }
 
   /** Acquire one slot, aborting while queued when `signal` fires. */
@@ -349,7 +354,6 @@ export interface LongScreenshotOcrRequest {
   overlap?: number
   prompt?: string
   jobs?: number
-  chunkTimeoutSeconds?: number
   splitOnly?: boolean
   resume?: boolean
 }
@@ -484,7 +488,8 @@ export interface VisionToolkitHealthResult {
 /** Shared per-call execution options. */
 export interface ToolCallOptions {
   signal: AbortSignal
-  timeoutMs?: number
+  /** Override the global hard timeout (seconds) for this call. */
+  timeoutSeconds?: number
   workspace: string
   /** Session identity for the per-session concurrency cap. */
   sessionId?: string
@@ -517,10 +522,12 @@ interface OperationMetrics {
 interface OperationContext {
   signal: AbortSignal
   metrics: OperationMetrics
+  /** Absolute epoch-millisecond timestamp when the global hard timeout fires. */
+  deadlineAt: number
 }
 
 const REGION_PATTERN = /^\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*$/
-const MAX_TIMEOUT_MS = 600_000
+const MAX_TIMEOUT_SECONDS = 600
 const FORMAT_BY_EXTENSION = new Map([
   ['.png', 'png'],
   ['.jpg', 'jpeg'],
@@ -529,6 +536,25 @@ const FORMAT_BY_EXTENSION = new Map([
   ['.webp', 'webp'],
 ])
 const HEX_COLOR_PATTERN = /^#[0-9A-F]{6}$/
+
+/** Error codes a provider retries within its attempt budget (429 is handled separately). */
+const RETRYABLE_CODES: ReadonlySet<VisionToolkitErrorCode> = new Set(['service', 'timeout'])
+
+/** Resolve as soon as `signal` aborts (or immediately when already aborted). */
+function untilAbort(signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve()
+  return new Promise(resolve => signal.addEventListener('abort', () => resolve(), { once: true }))
+}
+
+/** Sleep for `ms`, resolving early when `signal` aborts. */
+function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve()
+  return new Promise(resolve => {
+    const onAbort = (): void => { clearTimeout(timer); resolve() }
+    const timer = setTimeout(() => { signal.removeEventListener('abort', onAbort); resolve() }, ms)
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+}
 
 function integerInRange(value: number | undefined, fallback: number, minimum: number, maximum: number, name: string): number {
   const resolved = value ?? fallback
@@ -703,6 +729,37 @@ interface ResolvedProviderEnv {
   env: UpstreamEnvironment
 }
 
+/** Mutable in-flight state for one provider during a hedge-based failover run. */
+interface ProviderTask {
+  index: number
+  entry: ResolvedProviderEnv
+  cumulativeMs: number
+  status: 'idle' | 'running' | 'succeeded' | 'failed' | 'ratelimited'
+  result?: UpstreamRunResult
+  error?: VisionToolkitError
+  hedged: boolean
+  launched: boolean
+  settled: Promise<void>
+  settle: () => void
+  abort: AbortController
+}
+
+/** Live concurrency accounting returned by the availability query tool. */
+export interface ConcurrencyStatus {
+  /** New tool calls this session may start right now. */
+  available: number
+  /** Per-session cap on concurrent tool operations. */
+  sessionMax: number
+  /** Tool operations currently in flight in this session. */
+  sessionInUse: number
+  /** Free per-session slots. */
+  sessionFree: number
+  /** Total free model-request slots summed across enabled providers. */
+  modelFree: number
+  /** Per-provider breakdown. */
+  models: Array<{ name: string; concurrency: number; inUse: number; free: number }>
+}
+
 /** Runtime facade used by every native tool. */
 export class VisionToolkitRuntime {
   private readonly semaphores = new Map<string, Semaphore>()
@@ -721,6 +778,11 @@ export class VisionToolkitRuntime {
   /** Pinned and prepared upstream identity. */
   get upstreamVersion(): UpstreamVersionInfo {
     return this.adapter.versionInfo
+  }
+
+  /** Per-session cap on concurrent tool operations. */
+  get sessionMaxConcurrency(): number {
+    return this.config.sessionMaxConcurrency
   }
 
   /** Stable identity for persisted image descriptions produced by this runtime. */
@@ -749,18 +811,13 @@ export class VisionToolkitRuntime {
     })
   }
 
-  private timeout(options: ToolCallOptions): number {
-    const value = options.timeoutMs ?? this.operationTimeoutMs()
-    if (!Number.isInteger(value) || value < 1000 || value > MAX_TIMEOUT_MS) {
-      throw new VisionToolkitError('input', `timeoutMs must be an integer between 1000 and ${MAX_TIMEOUT_MS}`)
+  /** Global hard timeout (ms) for one tool invocation, honoring the per-call override. */
+  private hardTimeoutMs(options: ToolCallOptions): number {
+    const seconds = options.timeoutSeconds ?? this.config.hardTimeoutSeconds
+    if (!Number.isInteger(seconds) || seconds < 1 || seconds > MAX_TIMEOUT_SECONDS) {
+      throw new VisionToolkitError('input', `timeoutSeconds must be an integer between 1 and ${MAX_TIMEOUT_SECONDS}`)
     }
-    return value
-  }
-
-  /** Overall operation budget: the slowest enabled provider's timeout, else the global default. */
-  private operationTimeoutMs(): number {
-    const providers = this.config.providers.filter(provider => provider.enabled)
-    return providers.length === 0 ? this.config.timeoutMs : Math.max(...providers.map(provider => provider.timeoutMs))
+    return seconds * 1000
   }
 
   private operationError(
@@ -785,11 +842,38 @@ export class VisionToolkitRuntime {
     return new VisionToolkitError('runtime', `${tool}: execution failed`, { cause: error })
   }
 
-  private semaphore(options: ToolCallOptions): { key: string; value: Semaphore } {
+  /** Per-session concurrency gate; callers acquire without queuing (excess is rejected). */
+  private sessionGate(options: ToolCallOptions): { key: string; value: Semaphore } {
     const key = options.sessionId ?? `workspace:${options.workspace}`
-    const value = this.semaphores.get(key) ?? new Semaphore(this.config.concurrency)
+    const value = this.semaphores.get(key) ?? new Semaphore(this.config.sessionMaxConcurrency)
     this.semaphores.set(key, value)
     return { key, value }
+  }
+
+  /** Live concurrency accounting for the calling session across the enabled provider pool. */
+  concurrencyStatus(options: ToolCallOptions): ConcurrencyStatus {
+    const gate = this.sessionGate(options)
+    const sessionFree = gate.value.available
+    const models = this.config.providers
+      .filter(provider => provider.enabled)
+      .map(provider => {
+        const modelGate = this.providerGate(provider)
+        return {
+          name: provider.name,
+          concurrency: provider.concurrency,
+          inUse: provider.concurrency - modelGate.available,
+          free: modelGate.available,
+        }
+      })
+    const modelFree = models.reduce((sum, model) => sum + model.free, 0)
+    return {
+      available: Math.min(sessionFree, modelFree),
+      sessionMax: this.config.sessionMaxConcurrency,
+      sessionInUse: this.config.sessionMaxConcurrency - sessionFree,
+      sessionFree,
+      modelFree,
+      models,
+    }
   }
 
   private async runOperation<T>(
@@ -798,10 +882,11 @@ export class VisionToolkitRuntime {
     action: (operation: OperationContext) => Promise<T>,
     permits = 1,
   ): Promise<T> {
-    const timeoutMs = this.timeout(options)
-    const semaphore = this.semaphore(options)
+    const hardTimeoutMs = this.hardTimeoutMs(options)
+    const startedAt = Date.now()
+    const deadlineAt = startedAt + hardTimeoutMs
     const metrics: OperationMetrics = {
-      startedAt: Date.now(),
+      startedAt,
       queueMs: 0,
       upstreamMs: 0,
       imageBytes: 0,
@@ -810,48 +895,19 @@ export class VisionToolkitRuntime {
       cacheHits: 0,
       usedVisionService: false,
     }
-    let acquired = false
-    const queueDeadline = createDeadline(options.signal, timeoutMs)
-    try {
-      await semaphore.value.acquire(queueDeadline.signal, permits)
-      acquired = true
-      if (queueDeadline.signal.aborted) throw this.operationError(tool, undefined, queueDeadline, 'queue')
-      metrics.queueMs = Date.now() - metrics.startedAt
-    } catch (error) {
-      metrics.queueMs = Date.now() - metrics.startedAt
-      const classified = this.operationError(tool, error, queueDeadline, 'queue')
-      if (acquired) {
-        semaphore.value.release(permits)
-        acquired = false
-      }
-      this.ctx.logger.warn(
-        'dsh-vision-toolkit tool=%s outcome=error category=%s totalMs=%d queueMs=%d upstreamMs=%d images=%d imageBytes=%d imagePixels=%d cacheHits=%d',
-        tool,
-        classified.code,
-        Date.now() - metrics.startedAt,
-        metrics.queueMs,
-        metrics.upstreamMs,
-        metrics.imageCount,
-        metrics.imageBytes,
-        metrics.imagePixels,
-        metrics.cacheHits,
-      )
-      throw classified
-    } finally {
-      queueDeadline.cleanup()
-      if (!acquired && semaphore.value.idle) this.semaphores.delete(semaphore.key)
+    const gate = this.sessionGate(options)
+    if (!gate.value.tryAcquire(permits)) {
+      throw new VisionToolkitError('capacity', `${tool}: exceeded the session concurrency limit`)
     }
-
-    const executionDeadline = createDeadline(options.signal, timeoutMs)
+    const executionDeadline = createDeadline(options.signal, hardTimeoutMs)
     try {
       if (executionDeadline.signal.aborted) throw this.operationError(tool, undefined, executionDeadline)
-      const value = await action({ signal: executionDeadline.signal, metrics })
+      const value = await action({ signal: executionDeadline.signal, metrics, deadlineAt })
       if (executionDeadline.signal.aborted) throw this.operationError(tool, undefined, executionDeadline)
       this.ctx.logger.info(
-        'dsh-vision-toolkit tool=%s outcome=ok totalMs=%d queueMs=%d upstreamMs=%d images=%d imageBytes=%d imagePixels=%d cacheHits=%d model=%s',
+        'dsh-vision-toolkit tool=%s outcome=ok totalMs=%d upstreamMs=%d images=%d imageBytes=%d imagePixels=%d cacheHits=%d model=%s',
         tool,
         Date.now() - metrics.startedAt,
-        metrics.queueMs,
         metrics.upstreamMs,
         metrics.imageCount,
         metrics.imageBytes,
@@ -863,11 +919,10 @@ export class VisionToolkitRuntime {
     } catch (error) {
       const classified = this.operationError(tool, error, executionDeadline)
       this.ctx.logger.warn(
-        'dsh-vision-toolkit tool=%s outcome=error category=%s totalMs=%d queueMs=%d upstreamMs=%d images=%d imageBytes=%d imagePixels=%d cacheHits=%d',
+        'dsh-vision-toolkit tool=%s outcome=error category=%s totalMs=%d upstreamMs=%d images=%d imageBytes=%d imagePixels=%d cacheHits=%d',
         tool,
         classified.code,
         Date.now() - metrics.startedAt,
-        metrics.queueMs,
         metrics.upstreamMs,
         metrics.imageCount,
         metrics.imageBytes,
@@ -876,9 +931,9 @@ export class VisionToolkitRuntime {
       )
       throw classified
     } finally {
-      if (acquired) semaphore.value.release(permits)
+      gate.value.release(permits)
       executionDeadline.cleanup()
-      if (semaphore.value.idle) this.semaphores.delete(semaphore.key)
+      if (gate.value.idle) this.semaphores.delete(gate.key)
     }
   }
 
@@ -1228,12 +1283,15 @@ export class VisionToolkitRuntime {
   }
 
   /**
-   * Run one online-vision upstream command across the enabled provider pool in
-   * priority order. A provider is skipped when its size limits or concurrency
-   * are exhausted, retried up to its attempt count, and the next provider
-   * takes over on failure. Throws once every provider has failed.
+   * Hedge-based failover across the enabled provider pool. The highest-priority
+   * provider runs first; when one of its requests crosses t1 it keeps running
+   * while the next provider starts in parallel. A provider whose cumulative
+   * request time reaches t2 is terminated. A 429 provider is parked and moved
+   * past immediately; parked providers are revisited at a 10s cadence once
+   * every other provider is exhausted. The result always prefers the earliest
+   * (highest-priority) provider.
    */
-  private async runVisionWithFailover(
+  private async runVisionHedge(
     tool: 'glance' | 'ground' | 'detect' | 'long_screenshot_ocr',
     args: readonly string[],
     images: readonly ImageInfo[],
@@ -1243,40 +1301,237 @@ export class VisionToolkitRuntime {
     if (pool.length === 0) {
       throw new VisionToolkitError('config', 'no enabled vision provider has a resolvable credential')
     }
-    let lastError: unknown
-    let attempted = false
-    for (const { provider, env } of pool) {
-      const fits = images.every(image => image.bytes <= provider.maxImageBytes && image.width * image.height <= provider.maxImagePixels)
-      if (!fits) continue
-      const gate = this.providerGate(provider)
-      if (!gate.tryAcquire()) continue
-      attempted = true
-      try {
-        for (let attempt = 1; attempt <= provider.attempts; attempt++) {
-          const attemptDeadline = createDeadline(operation.signal, provider.timeoutMs)
-          try {
-            return await this.runUpstream(tool, args, { signal: attemptDeadline.signal, metrics: operation.metrics }, env)
-          } catch (error) {
-            if (operation.signal.aborted) throw error
-            const classified = error instanceof VisionToolkitError
-              ? error
-              : new VisionToolkitError('service', `${tool}: request failed`, { cause: error })
-            lastError = attemptDeadline.timedOut && classified.code === 'cancelled'
-              ? new VisionToolkitError('timeout', `${tool}: ${provider.name} request timed out after ${provider.timeoutMs}ms`, { cause: classified })
-              : classified
-          } finally {
-            attemptDeadline.cleanup()
-          }
-        }
-      } finally {
-        gate.release()
+    // Providers that cannot accept the image size are skipped entirely.
+    const eligible = pool.filter(({ provider }) =>
+      images.every(image => image.bytes <= provider.maxImageBytes && image.width * image.height <= provider.maxImagePixels))
+    if (eligible.length === 0) {
+      throw new VisionToolkitError('capacity', `${tool}: no enabled vision provider accepts the image size`)
+    }
+
+    const tasks: ProviderTask[] = eligible.map((entry, index) => {
+      let settle!: () => void
+      const settled = new Promise<void>(resolve => { settle = resolve })
+      return {
+        index,
+        entry,
+        cumulativeMs: 0,
+        status: 'idle',
+        hedged: false,
+        launched: false,
+        settled,
+        settle,
+        abort: new AbortController(),
+      }
+    })
+    const n = tasks.length
+
+    const launch = (from: number): void => {
+      for (let i = from; i < n; i++) {
+        const task = tasks[i]
+        if (task === undefined || task.launched || task.status !== 'idle') continue
+        task.launched = true
+        void this.runProviderTask(tool, args, operation, task, () => launch(i + 1))
+        return
       }
     }
-    if (!attempted) {
-      throw new VisionToolkitError('capacity', `${tool}: no enabled vision provider accepts the image size or has a free concurrency slot`)
+
+    launch(0)
+
+    const settleAny = (subset: ProviderTask[]): Promise<void> =>
+      Promise.race([...subset.map(task => task.settled), untilAbort(operation.signal)])
+
+    while (true) {
+      if (operation.signal.aborted) break
+      const running = tasks.filter(task => task.status === 'running')
+      const successIndex = tasks.findIndex(task => task.status === 'succeeded')
+      if (successIndex >= 0) {
+        const blocking = running.filter(task => task.index < successIndex)
+        if (blocking.length === 0) {
+          for (const task of running) task.abort.abort()
+          return tasks[successIndex]!.result!
+        }
+        await settleAny(blocking)
+      } else {
+        if (running.length === 0) break
+        await settleAny(running)
+      }
     }
-    if (lastError instanceof VisionToolkitError) throw lastError
-    throw new VisionToolkitError('service', `${tool}: all vision providers failed`, { cause: lastError })
+
+    // No success from the main pass. Revisit parked (429) providers at a 10s cadence.
+    if (!operation.signal.aborted) {
+      const parked = tasks.filter(task => task.status === 'ratelimited')
+      if (parked.length > 0) {
+        const revisited = await this.revisitRateLimited(tool, args, operation, parked)
+        if (revisited !== undefined) return revisited
+      }
+    }
+
+    const success = tasks.find(task => task.status === 'succeeded')
+    if (success !== undefined) return success.result!
+    if (operation.signal.aborted) {
+      throw new VisionToolkitError('timeout', `${tool}: timed out`)
+    }
+    const firstError = tasks.find(task => task.status === 'failed' || task.status === 'ratelimited')
+    if (firstError?.error !== undefined) throw firstError.error
+    throw new VisionToolkitError('service', `${tool}: all vision providers failed`)
+  }
+
+  /** Remaining request budget (ms) for one provider: the tighter of its t2 and the global deadline. */
+  private providerRequestBudget(task: ProviderTask, operation: OperationContext): number {
+    const t2Remaining = task.entry.provider.t2Seconds * 1000 - task.cumulativeMs
+    const globalRemaining = operation.deadlineAt - Date.now()
+    return Math.max(0, Math.min(t2Remaining, globalRemaining))
+  }
+
+  /**
+   * Run one provider to a terminal state: retryable errors retry within
+   * `attempts`, a single request crossing t1 hedges the next provider, and the
+   * provider is terminated once its cumulative time reaches t2. A 429 parks the
+   * provider and moves on. No request is issued once the remaining budget drops
+   * below the configured minimum available time.
+   */
+  private async runProviderTask(
+    tool: 'glance' | 'ground' | 'detect' | 'long_screenshot_ocr',
+    args: readonly string[],
+    operation: OperationContext,
+    task: ProviderTask,
+    launchNext: () => void,
+  ): Promise<void> {
+    const { provider, env } = task.entry
+    const gate = this.providerGate(provider)
+    if (!gate.tryAcquire()) {
+      task.status = 'failed'
+      task.error = new VisionToolkitError('capacity', `${tool}: ${provider.name} has no free concurrency slot`)
+      task.settle()
+      launchNext()
+      return
+    }
+    task.status = 'running'
+    try {
+      let attempt = 0
+      const minAvailableMs = this.config.minAvailableSeconds * 1000
+      while (true) {
+        const budget = this.providerRequestBudget(task, operation)
+        if (budget < minAvailableMs) {
+          task.status = 'failed'
+          task.error = new VisionToolkitError('timeout', `${tool}: ${provider.name} has insufficient remaining time`)
+          return
+        }
+        const reqDeadline = createDeadline(AbortSignal.any([operation.signal, task.abort.signal]), budget)
+        const hedgeMs = Math.min(provider.t1Seconds * 1000, budget)
+        let hedgeTimer: ReturnType<typeof setTimeout> | undefined
+        if (!task.hedged) {
+          hedgeTimer = setTimeout(() => {
+            task.hedged = true
+            launchNext()
+          }, hedgeMs)
+        }
+        const started = Date.now()
+        try {
+          const result = await this.runUpstream(tool, args, { signal: reqDeadline.signal, metrics: operation.metrics }, env)
+          if (hedgeTimer !== undefined) clearTimeout(hedgeTimer)
+          task.cumulativeMs += Date.now() - started
+          task.status = 'succeeded'
+          task.result = result
+          return
+        } catch (error) {
+          if (hedgeTimer !== undefined) clearTimeout(hedgeTimer)
+          task.cumulativeMs += Date.now() - started
+          if (task.abort.signal.aborted) {
+            task.status = 'failed'
+            task.error = new VisionToolkitError('cancelled', `${tool}: superseded by a higher-priority provider`)
+            return
+          }
+          if (operation.signal.aborted) {
+            task.status = 'failed'
+            task.error = new VisionToolkitError('timeout', `${tool}: timed out`)
+            return
+          }
+          const classified = error instanceof VisionToolkitError
+            ? error
+            : new VisionToolkitError('service', `${tool}: request failed`, { cause: error })
+          if (reqDeadline.timedOut) {
+            task.status = 'failed'
+            task.error = new VisionToolkitError('timeout', `${tool}: ${provider.name} exhausted its t2 budget`)
+            return
+          }
+          if (classified.code === 'rate_limit') {
+            task.status = 'ratelimited'
+            task.error = classified
+            launchNext()
+            return
+          }
+          if (RETRYABLE_CODES.has(classified.code) && attempt + 1 < provider.attempts) {
+            attempt += 1
+            continue
+          }
+          task.status = 'failed'
+          task.error = classified
+          return
+        } finally {
+          reqDeadline.cleanup()
+        }
+      }
+    } finally {
+      gate.release()
+      task.settle()
+    }
+  }
+
+  /**
+   * Revisit parked (429) providers in priority order at a 10s cadence until one
+   * succeeds or every provider exhausts its budget. Returns a success result or
+   * `undefined` when the global deadline or minimum available time stops the loop.
+   */
+  private async revisitRateLimited(
+    tool: 'glance' | 'ground' | 'detect' | 'long_screenshot_ocr',
+    args: readonly string[],
+    operation: OperationContext,
+    parked: ProviderTask[],
+  ): Promise<UpstreamRunResult | undefined> {
+    const minAvailableMs = this.config.minAvailableSeconds * 1000
+    while (!operation.signal.aborted) {
+      let anyRevisitable = false
+      for (const task of parked) {
+        if (operation.signal.aborted) break
+        if (task.status !== 'ratelimited') continue
+        const budget = this.providerRequestBudget(task, operation)
+        if (budget < minAvailableMs) continue
+        anyRevisitable = true
+        await abortableSleep(Math.min(10_000, budget), operation.signal)
+        if (operation.signal.aborted) break
+        const { provider, env } = task.entry
+        const gate = this.providerGate(provider)
+        if (!gate.tryAcquire()) continue
+        const reqDeadline = createDeadline(operation.signal, Math.min(provider.t2Seconds * 1000 - task.cumulativeMs, operation.deadlineAt - Date.now()))
+        const started = Date.now()
+        try {
+          const result = await this.runUpstream(tool, args, { signal: reqDeadline.signal, metrics: operation.metrics }, env)
+          task.cumulativeMs += Date.now() - started
+          task.status = 'succeeded'
+          task.result = result
+          return result
+        } catch (error) {
+          task.cumulativeMs += Date.now() - started
+          if (reqDeadline.timedOut) {
+            task.status = 'failed'
+            task.error = new VisionToolkitError('timeout', `${tool}: ${provider.name} exhausted its t2 budget`)
+            continue
+          }
+          const classified = error instanceof VisionToolkitError
+            ? error
+            : new VisionToolkitError('service', `${tool}: request failed`, { cause: error })
+          if (classified.code === 'rate_limit') continue
+          task.status = 'failed'
+          task.error = classified
+        } finally {
+          reqDeadline.cleanup()
+          gate.release()
+        }
+      }
+      if (!anyRevisitable) break
+    }
+    return undefined
   }
 
   private async glanceCacheKey(
@@ -1325,7 +1580,7 @@ export class VisionToolkitRuntime {
   private async runUpstream(
     tool: UpstreamTool,
     args: readonly string[],
-    operation: OperationContext,
+    operation: { signal: AbortSignal; metrics: OperationMetrics },
     env?: UpstreamEnvironment,
   ): Promise<UpstreamRunResult> {
     const started = Date.now()
@@ -1443,7 +1698,7 @@ export class VisionToolkitRuntime {
           return cached.result
         }
       }
-      const result = await this.runVisionWithFailover('glance', [
+      const result = await this.runVisionHedge('glance', [
         ...images.map(image => image.path),
         ...(request.region !== undefined ? ['--region', request.region] : []),
         ...(request.ocr === true ? ['--ocr'] : []),
@@ -1496,7 +1751,7 @@ export class VisionToolkitRuntime {
     }
     const image = await this.prepareVisionImage(request.image, pool.map(entry => entry.provider), policy, operation)
     this.accountImage(image, operation)
-    const result = await this.runVisionWithFailover(tool, [
+    const result = await this.runVisionHedge(tool, [
       image.path,
       request.target,
       ...(request.region !== undefined ? ['--region', request.region] : []),
@@ -1820,13 +2075,6 @@ export class VisionToolkitRuntime {
       const overlap = request.overlap === undefined
         ? undefined
         : integerInRange(request.overlap, request.overlap, 0, 10000, 'long_screenshot_ocr.overlap')
-      const chunkTimeoutSeconds = finiteInRange(
-        request.chunkTimeoutSeconds ?? Math.min(180, Math.max(1, Math.ceil(this.timeout(options) / 1000))),
-        1,
-        600,
-        'long_screenshot_ocr.chunkTimeoutSeconds',
-      )
-      if (chunkTimeoutSeconds === undefined) throw new VisionToolkitError('input', 'long_screenshot_ocr chunk timeout is required')
       if (request.prompt !== undefined && request.prompt.trim().length === 0) {
         throw new VisionToolkitError('input', 'long_screenshot_ocr.prompt must not be empty when provided')
       }
@@ -1868,13 +2116,13 @@ export class VisionToolkitRuntime {
           '--jobs',
           String(jobs),
           '--timeout',
-          String(chunkTimeoutSeconds),
+          String(this.config.hardTimeoutSeconds),
           ...(splitOnly ? ['--split-only'] : []),
           ...(request.resume === true ? ['--resume'] : []),
         ]
         const result = splitOnly
           ? await this.runUpstream('long_screenshot_ocr', ocrArgs, operation)
-          : await this.runVisionWithFailover('long_screenshot_ocr', ocrArgs, [image], operation, pool)
+          : await this.runVisionHedge('long_screenshot_ocr', ocrArgs, [image], operation, pool)
         const reported = result.stdout.trim()
         const expectedReported = splitOnly ? stagedManifest : stagedOutput
         if (reported !== expectedReported) {
@@ -2290,7 +2538,7 @@ export class VisionToolkitRuntime {
           }
           if (testModel) {
             try {
-              const attemptDeadline = createDeadline(operation.signal, target.timeoutMs)
+              const attemptDeadline = createDeadline(operation.signal, target.t2Seconds * 1000)
               try {
                 const result = await this.runUpstream(
                   'glance',

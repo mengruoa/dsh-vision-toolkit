@@ -5,6 +5,7 @@ node_modules/
 .python-bootstrap-dist/
 .DS_Store
 .dsh-vision-toolkit/
+.dsh-diff/
 .venv/
 __pycache__/
 *.pyc

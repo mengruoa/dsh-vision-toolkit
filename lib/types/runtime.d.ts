@@ -29,6 +29,8 @@ export declare class Semaphore {
     constructor(limit: number);
     /** Whether no active or queued caller still owns this gate. */
     get idle(): boolean;
+    /** Free slots still claimable without queuing. */
+    get available(): number;
     /** Acquire one slot, aborting while queued when `signal` fires. */
     acquire(signal: AbortSignal, permits?: number): Promise<void>;
     /** Release owned permits and wake FIFO waiters whose full weight now fits. */
@@ -197,7 +199,6 @@ export interface LongScreenshotOcrRequest {
     overlap?: number;
     prompt?: string;
     jobs?: number;
-    chunkTimeoutSeconds?: number;
     splitOnly?: boolean;
     resume?: boolean;
 }
@@ -329,7 +330,8 @@ export interface VisionToolkitHealthResult {
 /** Shared per-call execution options. */
 export interface ToolCallOptions {
     signal: AbortSignal;
-    timeoutMs?: number;
+    /** Override the global hard timeout (seconds) for this call. */
+    timeoutSeconds?: number;
     workspace: string;
     /** Session identity for the per-session concurrency cap. */
     sessionId?: string;
@@ -353,6 +355,26 @@ interface ResolvedProviderEnv {
     provider: ResolvedProvider;
     env: UpstreamEnvironment;
 }
+/** Live concurrency accounting returned by the availability query tool. */
+export interface ConcurrencyStatus {
+    /** New tool calls this session may start right now. */
+    available: number;
+    /** Per-session cap on concurrent tool operations. */
+    sessionMax: number;
+    /** Tool operations currently in flight in this session. */
+    sessionInUse: number;
+    /** Free per-session slots. */
+    sessionFree: number;
+    /** Total free model-request slots summed across enabled providers. */
+    modelFree: number;
+    /** Per-provider breakdown. */
+    models: Array<{
+        name: string;
+        concurrency: number;
+        inUse: number;
+        free: number;
+    }>;
+}
 /** Runtime facade used by every native tool. */
 export declare class VisionToolkitRuntime {
     private readonly ctx;
@@ -364,15 +386,19 @@ export declare class VisionToolkitRuntime {
     constructor(ctx: Context, config: ResolvedVisionToolkitConfig, adapter?: UpstreamAdapter);
     /** Pinned and prepared upstream identity. */
     get upstreamVersion(): UpstreamVersionInfo;
+    /** Per-session cap on concurrent tool operations. */
+    get sessionMaxConcurrency(): number;
     /** Stable identity for persisted image descriptions produced by this runtime. */
     get evidenceFingerprint(): string;
     /** Capture the credential and provider identity used by one evidence conversion. */
     captureEvidenceRuntime(): Promise<CapturedEvidenceRuntime>;
-    private timeout;
-    /** Overall operation budget: the slowest enabled provider's timeout, else the global default. */
-    private operationTimeoutMs;
+    /** Global hard timeout (ms) for one tool invocation, honoring the per-call override. */
+    private hardTimeoutMs;
     private operationError;
-    private semaphore;
+    /** Per-session concurrency gate; callers acquire without queuing (excess is rejected). */
+    private sessionGate;
+    /** Live concurrency accounting for the calling session across the enabled provider pool. */
+    concurrencyStatus(options: ToolCallOptions): ConcurrencyStatus;
     private runOperation;
     /** Highest-priority enabled provider, falling back to the first entry. */
     private get primaryProvider();
@@ -403,12 +429,31 @@ export declare class VisionToolkitRuntime {
      */
     private prepareVisionImage;
     /**
-     * Run one online-vision upstream command across the enabled provider pool in
-     * priority order. A provider is skipped when its size limits or concurrency
-     * are exhausted, retried up to its attempt count, and the next provider
-     * takes over on failure. Throws once every provider has failed.
+     * Hedge-based failover across the enabled provider pool. The highest-priority
+     * provider runs first; when one of its requests crosses t1 it keeps running
+     * while the next provider starts in parallel. A provider whose cumulative
+     * request time reaches t2 is terminated. A 429 provider is parked and moved
+     * past immediately; parked providers are revisited at a 10s cadence once
+     * every other provider is exhausted. The result always prefers the earliest
+     * (highest-priority) provider.
      */
-    private runVisionWithFailover;
+    private runVisionHedge;
+    /** Remaining request budget (ms) for one provider: the tighter of its t2 and the global deadline. */
+    private providerRequestBudget;
+    /**
+     * Run one provider to a terminal state: retryable errors retry within
+     * `attempts`, a single request crossing t1 hedges the next provider, and the
+     * provider is terminated once its cumulative time reaches t2. A 429 parks the
+     * provider and moves on. No request is issued once the remaining budget drops
+     * below the configured minimum available time.
+     */
+    private runProviderTask;
+    /**
+     * Revisit parked (429) providers in priority order at a 10s cadence until one
+     * succeeds or every provider exhausts its budget. Returns a success result or
+     * `undefined` when the global deadline or minimum available time stops the loop.
+     */
+    private revisitRateLimited;
     private glanceCacheKey;
     private runUpstream;
     private probeGeneratedImage;

@@ -16,6 +16,7 @@ export const VISION_TOOLKIT_ERROR_CODES = [
   'timeout',
   'cancelled',
   'path',
+  'rate_limit',
 ] as const
 
 /** Stable machine-readable error category. */

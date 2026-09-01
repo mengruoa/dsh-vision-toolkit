@@ -71,11 +71,21 @@ const en = {
   anthropicThinkingHint: 'omit has the broadest compatibility. Use disabled or adaptive only when the selected model documents that mode; restore omit first after HTTP 400.',
   userAgent: 'User-Agent',
   language: 'Output language',
-  limits: 'Limits',
+  limits: 'Timeout and concurrency',
   timeout: 'Request timeout (ms)',
+  t1: 't1 — single-request hedge (s)',
+  t1Hint: 'When a single request exceeds t1, keep it running and start the next model in parallel.',
+  t2: 't2 — cumulative cutoff (s)',
+  t2Hint: 'Terminate the model once its accumulated request time reaches t2.',
+  hardTimeout: 'Global hard timeout (s)',
+  hardTimeoutHint: 'Wall-clock ceiling for one tool call; on timeout every request is cancelled.',
+  sessionConcurrency: 'Per-session max concurrency',
+  sessionConcurrencyHint: 'Maximum concurrent vision calls in one session; excess is rejected immediately.',
+  minAvailable: 'Minimum available time (s)',
+  minAvailableHint: 'No new request is issued once the remaining budget drops below this value.',
   maxBytes: 'Maximum image bytes',
   maxPixels: 'Maximum image pixels',
-  concurrency: 'Concurrent calls per session',
+  concurrency: 'Concurrency (per model)',
   runtime: 'Runtime',
   runtimeMode: 'Runtime mode',
   toolkitPath: 'Pinned checkout path',
@@ -274,11 +284,21 @@ const zh: Record<LocaleKey, string> = {
   anthropicThinkingHint: 'omit 兼容性最好。仅当所选模型明确支持时使用 disabled 或 adaptive；遇到 HTTP 400 时先恢复 omit。',
   userAgent: 'User-Agent',
   language: '结果语言',
-  limits: '资源与并发限制',
+  limits: '超时与并发限制',
   timeout: '单次请求超时（毫秒）',
+  t1: 't1（单次请求阈值，秒）',
+  t1Hint: '单次请求超过 t1 时，继续请求并并行调用下一个模型。',
+  t2: 't2（累计终止阈值，秒）',
+  t2Hint: '该模型累计请求时长达到 t2 时终止。',
+  hardTimeout: '全局硬超时（秒）',
+  hardTimeoutHint: '单次工具调用的墙钟上限，超时终止所有任务。',
+  sessionConcurrency: '单会话最大并发',
+  sessionConcurrencyHint: '同一会话最多同时运行的视觉任务数，超出直接返回错误。',
+  minAvailable: '最低可用时间（秒）',
+  minAvailableHint: '剩余时间额度低于该值时不再发起新请求。',
   maxBytes: '单张图片大小上限（字节）',
   maxPixels: '单张图片最大像素数',
-  concurrency: '单个会话最多并发任务数',
+  concurrency: '并发（每个模型）',
   runtime: '工具运行环境',
   runtimeMode: '环境来源',
   toolkitPath: 'agent-vision-toolkit 目录',
@@ -501,7 +521,8 @@ interface ProviderValue {
   protocol?: 'openai' | 'anthropic'
   anthropicThinking?: 'omit' | 'disabled' | 'adaptive'
   userAgent?: string
-  timeoutMs?: number
+  t1Seconds?: number
+  t2Seconds?: number
   maxImageBytes?: number
   maxImagePixels?: number
   concurrency?: number
@@ -519,7 +540,9 @@ interface SettingsValue {
   }
   providers?: ProviderValue[]
   language?: 'zh' | 'en'
-  timeoutMs?: number
+  hardTimeoutSeconds?: number
+  sessionMaxConcurrency?: number
+  minAvailableSeconds?: number
   maxImageBytes?: number
   maxImagePixels?: number
   concurrency?: number
@@ -1140,7 +1163,8 @@ interface ProviderDraft {
   protocol: 'openai' | 'anthropic'
   anthropicThinking: 'omit' | 'disabled' | 'adaptive'
   userAgent: string
-  timeoutMs: string
+  t1Seconds: string
+  t2Seconds: string
   maxImageBytes: string
   maxImagePixels: string
   concurrency: string
@@ -1150,7 +1174,9 @@ interface ProviderDraft {
 interface Draft {
   providers: ProviderDraft[]
   language: 'zh' | 'en'
-  timeoutMs: string
+  hardTimeoutSeconds: string
+  sessionMaxConcurrency: string
+  minAvailableSeconds: string
   maxImageBytes: string
   maxImagePixels: string
   concurrency: string
@@ -1179,7 +1205,6 @@ function autoCredentialName(id: string): string {
 }
 
 interface ProviderDefaults {
-  timeoutMs: number
   maxImageBytes: number
   maxImagePixels: number
   concurrency: number
@@ -1197,7 +1222,8 @@ function emptyProviderDraft(defaults: ProviderDefaults): ProviderDraft {
     protocol: 'openai',
     anthropicThinking: 'omit',
     userAgent: DEFAULT_USER_AGENT,
-    timeoutMs: String(defaults.timeoutMs),
+    t1Seconds: '90',
+    t2Seconds: '90',
     maxImageBytes: String(defaults.maxImageBytes),
     maxImagePixels: String(defaults.maxImagePixels),
     concurrency: String(defaults.concurrency),
@@ -1218,7 +1244,8 @@ function providerDraftOf(value: ProviderValue | undefined, fallback: ProviderVal
     protocol: source?.protocol ?? 'openai',
     anthropicThinking: source?.anthropicThinking ?? 'omit',
     userAgent: source?.userAgent ?? DEFAULT_USER_AGENT,
-    timeoutMs: String(source?.timeoutMs ?? defaults.timeoutMs),
+    t1Seconds: String(source?.t1Seconds ?? 90),
+    t2Seconds: String(source?.t2Seconds ?? 90),
     maxImageBytes: String(source?.maxImageBytes ?? defaults.maxImageBytes),
     maxImagePixels: String(source?.maxImagePixels ?? defaults.maxImagePixels),
     concurrency: String(source?.concurrency ?? defaults.concurrency),
@@ -1228,7 +1255,6 @@ function providerDraftOf(value: ProviderValue | undefined, fallback: ProviderVal
 
 function draftOf(value: SettingsValue): Draft {
   const globalDefaults: ProviderDefaults = {
-    timeoutMs: value.timeoutMs ?? 30000,
     maxImageBytes: value.maxImageBytes ?? 4194304,
     maxImagePixels: value.maxImagePixels ?? 20000000,
     concurrency: value.concurrency ?? 4,
@@ -1240,7 +1266,9 @@ function draftOf(value: SettingsValue): Draft {
   return {
     providers,
     language: value.language ?? 'zh',
-    timeoutMs: String(globalDefaults.timeoutMs),
+    hardTimeoutSeconds: String(value.hardTimeoutSeconds ?? 180),
+    sessionMaxConcurrency: String(value.sessionMaxConcurrency ?? 6),
+    minAvailableSeconds: String(value.minAvailableSeconds ?? 20),
     maxImageBytes: String(globalDefaults.maxImageBytes),
     maxImagePixels: String(globalDefaults.maxImagePixels),
     concurrency: String(globalDefaults.concurrency),
@@ -1282,7 +1310,8 @@ function valueOf(draft: Draft, t: Translate): SettingsValue {
     protocol: provider.protocol,
     anthropicThinking: provider.anthropicThinking,
     ...(provider.userAgent.trim() === DEFAULT_USER_AGENT ? {} : { userAgent: provider.userAgent.trim() }),
-    ...(provider.timeoutMs.trim().length === 0 ? {} : { timeoutMs: positiveInteger(provider.timeoutMs, t('timeout'), t) }),
+    ...(provider.t1Seconds.trim().length === 0 ? {} : { t1Seconds: positiveInteger(provider.t1Seconds, t('t1'), t) }),
+    ...(provider.t2Seconds.trim().length === 0 ? {} : { t2Seconds: positiveInteger(provider.t2Seconds, t('t2'), t) }),
     ...(provider.maxImageBytes.trim().length === 0 ? {} : { maxImageBytes: positiveInteger(provider.maxImageBytes, t('maxBytes'), t) }),
     ...(provider.maxImagePixels.trim().length === 0 ? {} : { maxImagePixels: positiveInteger(provider.maxImagePixels, t('maxPixels'), t) }),
     ...(provider.concurrency.trim().length === 0 ? {} : { concurrency: positiveInteger(provider.concurrency, t('concurrency'), t) }),
@@ -1300,7 +1329,9 @@ function valueOf(draft: Draft, t: Translate): SettingsValue {
     },
     providers,
     language: draft.language,
-    timeoutMs: positiveInteger(draft.timeoutMs, t('timeout'), t),
+    hardTimeoutSeconds: positiveInteger(draft.hardTimeoutSeconds, t('hardTimeout'), t),
+    sessionMaxConcurrency: positiveInteger(draft.sessionMaxConcurrency, t('sessionConcurrency'), t),
+    minAvailableSeconds: positiveInteger(draft.minAvailableSeconds, t('minAvailable'), t),
     maxImageBytes: positiveInteger(draft.maxImageBytes, t('maxBytes'), t),
     maxImagePixels: positiveInteger(draft.maxImagePixels, t('maxPixels'), t),
     concurrency: positiveInteger(draft.concurrency, t('concurrency'), t),
@@ -1488,7 +1519,6 @@ function LoadedSettings({ controller, t }: SettingsInjected) {
     setDraft(current => current === undefined ? current : {
       ...current,
       providers: [...current.providers, emptyProviderDraft({
-        timeoutMs: Number(current.timeoutMs) || 30000,
         maxImageBytes: Number(current.maxImageBytes) || 4194304,
         maxImagePixels: Number(current.maxImagePixels) || 20000000,
         concurrency: Number(current.concurrency) || 4,
@@ -1626,7 +1656,8 @@ function LoadedSettings({ controller, t }: SettingsInjected) {
               <Field label={t('protocol')}><select aria-label={t('protocol')} disabled={!snapshot.writable || busy} value={selectedProvider.protocol} onChange={(event) => { updateProvider(selectedIndex, 'protocol', event.target.value as 'openai' | 'anthropic') }}><option value="openai">OpenAI Chat Completions</option><option value="anthropic">Anthropic Messages</option></select></Field>
               {selectedProvider.protocol === 'anthropic' ? <Field label={t('anthropicThinking')} hint={t('anthropicThinkingHint')}><select aria-label={t('anthropicThinking')} value={selectedProvider.anthropicThinking} onChange={(event) => { updateProvider(selectedIndex, 'anthropicThinking', event.target.value as 'omit' | 'disabled' | 'adaptive') }}><option value="omit">omit (widest compatibility)</option><option value="disabled">disabled (model support required)</option><option value="adaptive">adaptive (model support required)</option></select></Field> : null}
               <Field label={t('userAgent')}><Input aria-label={t('userAgent')} value={selectedProvider.userAgent} onChange={(event) => { updateProvider(selectedIndex, 'userAgent', event.target.value) }} /></Field>
-              <Field label={t('timeout')}><Input aria-label={t('timeout')} inputMode="numeric" value={selectedProvider.timeoutMs} onChange={(event) => { updateProvider(selectedIndex, 'timeoutMs', event.target.value) }} /></Field>
+              <Field label={t('t1')} hint={t('t1Hint')}><Input aria-label={t('t1')} inputMode="numeric" value={selectedProvider.t1Seconds} onChange={(event) => { updateProvider(selectedIndex, 't1Seconds', event.target.value) }} /></Field>
+              <Field label={t('t2')} hint={t('t2Hint')}><Input aria-label={t('t2')} inputMode="numeric" value={selectedProvider.t2Seconds} onChange={(event) => { updateProvider(selectedIndex, 't2Seconds', event.target.value) }} /></Field>
               <Field label={t('maxBytes')}><Input aria-label={t('maxBytes')} inputMode="numeric" value={selectedProvider.maxImageBytes} onChange={(event) => { updateProvider(selectedIndex, 'maxImageBytes', event.target.value) }} /></Field>
               <Field label={t('maxPixels')}><Input aria-label={t('maxPixels')} inputMode="numeric" value={selectedProvider.maxImagePixels} onChange={(event) => { updateProvider(selectedIndex, 'maxImagePixels', event.target.value) }} /></Field>
               <Field label={t('concurrency')}><Input aria-label={t('concurrency')} inputMode="numeric" value={selectedProvider.concurrency} onChange={(event) => { updateProvider(selectedIndex, 'concurrency', event.target.value) }} /></Field>
@@ -1701,6 +1732,12 @@ function LoadedSettings({ controller, t }: SettingsInjected) {
         <div className="dvt-advanced-body">
           <section className="dvt-panel"><div className="dvt-panel-title"><h3>{t('language')}</h3></div><div className="dvt-form-grid">
             <Field label={t('language')}><select value={draft.language} onChange={(event) => { update('language', event.target.value as 'zh' | 'en') }}><option value="zh">中文</option><option value="en">English</option></select></Field>
+          </div></section>
+
+          <section className="dvt-panel"><div className="dvt-panel-title"><h3>{t('limits')}</h3></div><div className="dvt-form-grid">
+            <Field label={t('hardTimeout')} hint={t('hardTimeoutHint')}><Input aria-label={t('hardTimeout')} inputMode="numeric" value={draft.hardTimeoutSeconds} onChange={(event) => { update('hardTimeoutSeconds', event.target.value) }} /></Field>
+            <Field label={t('sessionConcurrency')} hint={t('sessionConcurrencyHint')}><Input aria-label={t('sessionConcurrency')} inputMode="numeric" value={draft.sessionMaxConcurrency} onChange={(event) => { update('sessionMaxConcurrency', event.target.value) }} /></Field>
+            <Field label={t('minAvailable')} hint={t('minAvailableHint')}><Input aria-label={t('minAvailable')} inputMode="numeric" value={draft.minAvailableSeconds} onChange={(event) => { update('minAvailableSeconds', event.target.value) }} /></Field>
           </div></section>
 
           <section className="dvt-panel"><div className="dvt-panel-title"><h3>{t('imageInput')}</h3></div><label className="dvt-check"><input type="checkbox" checked={draft.hiddenVariants} disabled={!snapshot.writable || busy} onChange={(event) => { update('hiddenVariants', event.target.checked) }} /><span>{t('hiddenVariantsLabel')}</span><small>{t('hiddenVariantsHint')}</small></label></section>
