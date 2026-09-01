@@ -37,6 +37,13 @@ All notable user-facing changes to DSH Vision Toolkit are documented in this fil
 - Reported the alpha (transparency) channel of locally analyzed images in every image-info block.
 - Online vision service supports multiple provider APIs: enable/disable, per-API resource and concurrency limits, a per-API attempt count, and user-sortable priority. A failed or concurrency-exhausted request fails over to the next provider until all are exhausted, and images that exceed every provider's limits are compressed once before the request.
 
+## [0.1.40] - 2026-08-31
+
+### Fixed
+
+- Stopped importing the `settingsNamespace` export from `@deepseek-ai/dsh-settings`, which dsh 0.1.2-alpha removed; the plugin now inlines the namespace check, so the profile no longer fails to boot on the alpha channel.
+- Retained configured shared-storage roots in a plugin-owned `storage-domain` sidecar, so persisted pasted-image and artifact paths remain readable after read-only Settings changes and Profile restarts.
+
 ## [0.1.39] - 2026-08-25
 
 ### Fixed
@@ -449,7 +456,8 @@ All notable user-facing changes to DSH Vision Toolkit are documented in this fil
 - Runtime teardown cancels in-flight operations before removing Agent-scoped tools, the activation bootstrap, and the Skill.
 - The Web client is published through the current nested `dsh.client` manifest and loader-compatible built artifact required by DSH snapshot0810.
 
-[Unreleased]: https://github.com/Anionex/dsh-vision-toolkit/compare/v0.1.39...HEAD
+[Unreleased]: https://github.com/Anionex/dsh-vision-toolkit/compare/v0.1.40...HEAD
+[0.1.40]: https://github.com/Anionex/dsh-vision-toolkit/compare/v0.1.39...v0.1.40
 [0.1.39]: https://github.com/Anionex/dsh-vision-toolkit/compare/v0.1.38...v0.1.39
 [0.1.38]: https://github.com/Anionex/dsh-vision-toolkit/compare/v0.1.37...v0.1.38
 [0.1.37]: https://github.com/Anionex/dsh-vision-toolkit/compare/v0.1.36...v0.1.37

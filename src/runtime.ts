@@ -475,6 +475,9 @@ export interface VisionToolkitHealthResult {
     python: HealthCheck
     dependencies: HealthCheck
     chrome: HealthCheck
+    credential: HealthCheck
+    artifactDirectory: HealthCheck
+    tempDirectory: HealthCheck
     service: HealthCheck
     model: HealthCheck
   }
@@ -771,6 +774,7 @@ export class VisionToolkitRuntime {
     private readonly ctx: Context,
     private readonly config: ResolvedVisionToolkitConfig,
     adapter?: UpstreamAdapter,
+    private readonly readableStorageDirs: readonly string[] = [],
   ) {
     this.adapter = adapter ?? new UpstreamAdapter(ctx, config)
   }
@@ -783,6 +787,11 @@ export class VisionToolkitRuntime {
   /** Per-session cap on concurrent tool operations. */
   get sessionMaxConcurrency(): number {
     return this.config.sessionMaxConcurrency
+  }
+
+  /** Shared storage root belonging to this immutable runtime generation. */
+  get storageDirectory(): string | undefined {
+    return this.config.storageDir
   }
 
   /** Stable identity for persisted image descriptions produced by this runtime. */
@@ -1010,13 +1019,13 @@ export class VisionToolkitRuntime {
   }
 
   private pathPolicy(workspace: string): Promise<PathPolicy> {
-    return createPathPolicy(workspace, this.config.allowedDirs)
+    return createPathPolicy(workspace, this.config.allowedDirs, this.config.storageDir, this.readableStorageDirs)
   }
 
   private async compressedImageRoot(policy: PathPolicy): Promise<string> {
-    const root = join(policy.workspace, '.dsh-vision-toolkit', 'tmp', 'compressed-images')
-    let current = policy.workspace
-    for (const segment of ['.dsh-vision-toolkit', 'tmp', 'compressed-images']) {
+    const root = join(policy.storageRoot, 'tmp', 'compressed-images')
+    let current = policy.storageRoot
+    for (const segment of ['tmp', 'compressed-images']) {
       current = join(current, segment)
       try {
         await mkdir(current, { mode: 0o700 })
@@ -1027,13 +1036,13 @@ export class VisionToolkitRuntime {
       if (info.isSymbolicLink() || !info.isDirectory()) {
         throw new VisionToolkitError('path', `compressed-image cache path is not a real directory: ${current}`)
       }
-      if (!isWithin(policy.workspace, current)) {
-        throw new VisionToolkitError('path', `compressed-image cache path escaped the workspace: ${current}`)
+      if (!isWithin(policy.storageRoot, current)) {
+        throw new VisionToolkitError('path', `compressed-image cache path escaped plugin storage: ${current}`)
       }
     }
     const canonical = await realpath(root)
-    if (!isWithin(policy.workspace, canonical)) {
-      throw new VisionToolkitError('path', 'compressed-image cache resolved outside the workspace')
+    if (!isWithin(policy.storageRoot, canonical)) {
+      throw new VisionToolkitError('path', 'compressed-image cache resolved outside plugin storage')
     }
     return canonical
   }
@@ -2453,6 +2462,18 @@ export class VisionToolkitRuntime {
     })
   }
 
+  private async writableDirectoryCheck(path: string, label: string): Promise<HealthCheck> {
+    const probe = join(path, `.vision-toolkit-health-${randomUUID()}`)
+    try {
+      await writeFile(probe, 'ok\n', { encoding: 'utf8', flag: 'wx' })
+      await rm(probe, { force: true })
+      return { status: 'ok', detail: `${label} is writable: ${path}` }
+    } catch {
+      await rm(probe, { force: true }).catch(() => {})
+      return { status: 'error', detail: `${label} is not writable: ${path}` }
+    }
+  }
+
   /** Health: inspect local readiness, and optionally probe one provider's `/models` plus one real multimodal request. */
   async health(testConnection: boolean, options: ToolCallOptions, testModel = false, provider?: ResolvedProvider): Promise<VisionToolkitHealthResult> {
     return this.runOperation('vision_toolkit_health', options, async (operation) => {
@@ -2474,6 +2495,27 @@ export class VisionToolkitRuntime {
         if (operation.signal.aborted) throw new VisionToolkitError('cancelled', 'vision_toolkit_health: cancelled')
         chrome = { status: 'error', detail: 'Chrome availability probe failed' }
       }
+      let resolvedCredential: ResolvedCredential | undefined
+      let credential: HealthCheck
+      try {
+        resolvedCredential = isBuiltInFreeVisionProvider(this.config.provider)
+          ? { value: BUILT_IN_FREE_VISION_KEY, source: 'built-in' }
+          : await this.ctx.credentials.resolve(this.config.provider.credential)
+        credential = resolvedCredential === undefined
+          ? { status: 'error', detail: `credential ${this.config.provider.credential} is not configured` }
+          : { status: 'ok', detail: `credential ${this.config.provider.credential} is resolvable` }
+      } catch {
+        credential = { status: 'error', detail: `credential ${this.config.provider.credential} could not be resolved` }
+      }
+      let artifactDirectory: HealthCheck
+      try {
+        // allowedDirs are session input roots; they do not affect output readiness.
+        const policy = await createPathPolicy(options.workspace, [], this.config.storageDir)
+        artifactDirectory = await this.writableDirectoryCheck(policy.outputDir, 'Artifact directory')
+      } catch {
+        artifactDirectory = { status: 'error', detail: 'Artifact directory could not be prepared' }
+      }
+      const tempDirectory = await this.writableDirectoryCheck(info.runtimeHome, 'Runtime temp directory')
       let service: HealthCheck = {
         status: 'not_tested',
         detail: 'Connection was not tested; use the per-provider API test',
@@ -2564,7 +2606,7 @@ export class VisionToolkitRuntime {
           }
         }
       }
-      const checks = { python, dependencies, chrome, service, model }
+      const checks = { python, dependencies, chrome, credential, artifactDirectory, tempDirectory, service, model }
       const healthy = Object.values(checks).every(check => check.status !== 'error')
       return {
         pluginVersion: PLUGIN_VERSION,

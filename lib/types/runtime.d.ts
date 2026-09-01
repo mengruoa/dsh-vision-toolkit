@@ -318,6 +318,9 @@ export interface VisionToolkitHealthResult {
         python: HealthCheck;
         dependencies: HealthCheck;
         chrome: HealthCheck;
+        credential: HealthCheck;
+        artifactDirectory: HealthCheck;
+        tempDirectory: HealthCheck;
         service: HealthCheck;
         model: HealthCheck;
     };
@@ -379,15 +382,18 @@ export interface ConcurrencyStatus {
 export declare class VisionToolkitRuntime {
     private readonly ctx;
     private readonly config;
+    private readonly readableStorageDirs;
     private readonly semaphores;
     private readonly glanceCache;
     private readonly providerGates;
     private readonly adapter;
-    constructor(ctx: Context, config: ResolvedVisionToolkitConfig, adapter?: UpstreamAdapter);
+    constructor(ctx: Context, config: ResolvedVisionToolkitConfig, adapter?: UpstreamAdapter, readableStorageDirs?: readonly string[]);
     /** Pinned and prepared upstream identity. */
     get upstreamVersion(): UpstreamVersionInfo;
     /** Per-session cap on concurrent tool operations. */
     get sessionMaxConcurrency(): number;
+    /** Shared storage root belonging to this immutable runtime generation. */
+    get storageDirectory(): string | undefined;
     /** Stable identity for persisted image descriptions produced by this runtime. */
     get evidenceFingerprint(): string;
     /** Capture the credential and provider identity used by one evidence conversion. */
@@ -481,6 +487,7 @@ export declare class VisionToolkitRuntime {
     dominantColors(request: DominantColorsRequest, options: ToolCallOptions): Promise<DominantColorsResult>;
     /** html_screenshot: render only a path-fenced local HTML file in the pinned Chrome adapter. */
     htmlScreenshot(request: HtmlScreenshotRequest, options: ToolCallOptions): Promise<HtmlScreenshotResult>;
+    private writableDirectoryCheck;
     /** Health: inspect local readiness, and optionally probe one provider's `/models` plus one real multimodal request. */
     health(testConnection: boolean, options: ToolCallOptions, testModel?: boolean, provider?: ResolvedProvider): Promise<VisionToolkitHealthResult>;
     /** Report the packaged upstream snapshot version. */
