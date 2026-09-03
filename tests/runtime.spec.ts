@@ -1110,6 +1110,75 @@ describe('hedge-based failover', () => {
     const result = await runtime.glance({ images: ['sample.png'] }, { signal, workspace })
     expect(result.answer).toBe('answer-from-a')
   })
+
+  it('fails over immediately when the primary provider fails fast with an auth error', async () => {
+    const { ctx, config } = await setup({
+      providers: [
+        { name: 'A', baseUrl: 'https://a.example/v1', credential: 'KEY_A', model: 'model-a' },
+        { name: 'B', baseUrl: 'https://b.example/v1', credential: 'KEY_B', model: 'model-b' },
+      ],
+    })
+    const adapter = new ScriptedAdapter(ctx, config, preparedFixture())
+    let attemptsA = 0
+    adapter.behaviors.set('model-a', () => {
+      attemptsA += 1
+      return Promise.resolve({
+        stdout: '', stderr: 'HTTP 401 Unauthorized', stdoutTruncated: false, stderrTruncated: false, outcome: { exitCode: 1, signal: null },
+      })
+    })
+    adapter.behaviors.set('model-b', () => Promise.resolve({
+      stdout: 'answer-from-b\n', stderr: '', stdoutTruncated: false, stderrTruncated: false, outcome: { exitCode: 0, signal: null },
+    }))
+    const runtime = new VisionToolkitRuntime(ctx, config, adapter)
+    const workspace = await tempWorkspace()
+
+    const result = await runtime.glance({ images: ['sample.png'] }, { signal, workspace })
+    expect(result.answer).toBe('answer-from-b')
+    // A 401 is deterministic: the primary provider must NOT be retried, and
+    // the fast failure must still advance to the next provider.
+    expect(attemptsA).toBe(1)
+  })
+})
+
+describe('classifyFailure taxonomy', () => {
+  it('classifies remote provider failures into machine-routable codes', async () => {
+    const { adapter } = await setup()
+    const run = (stderr: string): UpstreamRunResult => ({
+      stdout: '',
+      stderr,
+      stdoutTruncated: false,
+      stderrTruncated: false,
+      outcome: { exitCode: 1, signal: null },
+    })
+    const codeOf = (stderr: string) =>
+      adapter.classifyFailure('glance', run(stderr), { timedOut: false, cancelled: false }).code
+
+    expect(codeOf('HTTP 401 Unauthorized')).toBe('auth')
+    expect(codeOf('HTTP 403 Forbidden')).toBe('auth')
+    expect(codeOf('HTTP 402 Payment Required')).toBe('quota')
+    expect(codeOf('insufficient balance')).toBe('quota')
+    expect(codeOf('HTTP 429 rate limit')).toBe('rate_limit')
+    expect(codeOf('HTTP 500 internal server error')).toBe('server')
+    expect(codeOf('HTTP 503 service unavailable')).toBe('server')
+    expect(codeOf('connection refused')).toBe('network')
+    expect(codeOf('HTTP 400 bad request')).toBe('invalid_request')
+    expect(codeOf('HTTP 404 not found')).toBe('invalid_request')
+  })
+
+  it('keeps local processing failures classified as before', async () => {
+    const { adapter } = await setup()
+    const run = (stderr: string): UpstreamRunResult => ({
+      stdout: '',
+      stderr,
+      stdoutTruncated: false,
+      stderrTruncated: false,
+      outcome: { exitCode: 1, signal: null },
+    })
+    expect(adapter.classifyFailure('crop', run('cannot open image.png'), { timedOut: false, cancelled: false }).code)
+      .toBe('input')
+    expect(adapter.classifyFailure('trace', run('requires vtracer'), { timedOut: false, cancelled: false }).code)
+      .toBe('runtime')
+  })
 })
 
 describe('upstream adapter version facts', () => {

@@ -447,6 +447,17 @@ export declare class VisionToolkitRuntime {
     /** Remaining request budget (ms) for one provider: the tighter of its t2 and the global deadline. */
     private providerRequestBudget;
     /**
+     * Advance to the next provider after one provider reached a terminal
+     * failure. This is what makes failover work for FAST failures too: the
+     * hedge timer only launches the next provider when the current one is SLOW
+     * (crosses t1), so a quick auth/5xx/network failure must explicitly launch
+     * the successor. Never advances when a higher-priority provider superseded
+     * this task, when the whole operation was cancelled, or when the global
+     * deadline has too little room left for another request. `launch` is
+     * idempotent, so an earlier hedge timer cannot cause a double launch.
+     */
+    private advanceAfterFailure;
+    /**
      * Run one provider to a terminal state: retryable errors retry within
      * `attempts`, a single request crossing t1 hedges the next provider, and the
      * provider is terminated once its cumulative time reaches t2. A 429 parks the

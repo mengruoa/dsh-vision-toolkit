@@ -6,6 +6,7 @@ node_modules/
 .DS_Store
 .dsh-vision-toolkit/
 .dsh-diff/
+.ace-tmp/
 .venv/
 __pycache__/
 *.pyc

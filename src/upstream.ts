@@ -1059,22 +1059,47 @@ export class UpstreamAdapter {
       return new VisionToolkitError('output', `${tool}: upstream output exceeded the capture limit`)
     }
     const message = upstreamFailureMessage(tool, result.stderr, options.secrets ?? [])
-    if (/HTTP 401|\b401\b|Unauthorized|authentication/i.test(result.stderr)) {
-      return new VisionToolkitError('service', `${message}; verify the configured credential`)
+    const stderr = result.stderr
+
+    // Remote provider failures, classified into a machine-routable taxonomy so
+    // the failover loop retries transient errors and fails over immediately on
+    // deterministic ones. Order matters: auth/quota/rate-limit/region/tos are
+    // checked before the broader server/network/request-shape patterns.
+    if (/HTTP 401|\b401\b|HTTP 403|\b403\b|Unauthorized|Forbidden|authentication|Invalid API-key|invalid api key|check the api key/i.test(stderr)) {
+      return new VisionToolkitError('auth', `${message}; verify the configured credential`)
     }
-    if (/HTTP 429|\b429\b|rate limit|quota/i.test(result.stderr)) {
+    if (/HTTP 402|\b402\b|Payment Required|insufficient balance|insufficient quota|insufficient credits|billing|out of credits|out of quota/i.test(stderr)) {
+      return new VisionToolkitError('quota', `${message}; the provider account is out of quota or unpaid`)
+    }
+    if (/HTTP 429|\b429\b|rate ?limit|too many requests/i.test(stderr)) {
       return new VisionToolkitError('rate_limit', `${message}; retry later or reduce concurrency`)
     }
-    if (/Missing config VISION_/i.test(result.stderr)) {
+    if (/not available in your region|prohibited region|unsupported region|region is not supported/i.test(stderr)) {
+      return new VisionToolkitError('region', `${message}; the provider is not available in this region`)
+    }
+    if (/terms of service|\btos\b|content policy|safety system/i.test(stderr)) {
+      return new VisionToolkitError('tos', `${message}; the request was rejected by the provider content policy`)
+    }
+    if (/HTTP 5\d\d|\b500\b|\b502\b|\b503\b|\b504\b|bad gateway|service unavailable|internal server error/i.test(stderr)) {
+      return new VisionToolkitError('server', `${message}; the provider returned a server error`)
+    }
+    if (/connection refused|connection reset|ECONN|ENOTFOUND|EAI_AGAIN|getaddrinfo|fetch failed|name resolution|network error|network is unreachable/i.test(stderr)) {
+      return new VisionToolkitError('network', `${message}; network failure reaching the provider`)
+    }
+    if (/HTTP 400|\b400\b|HTTP 404|\b404\b|HTTP 422|\b422\b|invalid request|invalid model|no such model|model not exist|unknown model/i.test(stderr)) {
+      return new VisionToolkitError('invalid_request', `${message}; the request or model is not supported by this provider`)
+    }
+
+    if (/Missing config VISION_/i.test(stderr)) {
       return new VisionToolkitError('config', message)
     }
-    if (/maxImagePixels|exceed(?:s|ing).*pixels/i.test(result.stderr)) {
+    if (/maxImagePixels|exceed(?:s|ing).*pixels/i.test(stderr)) {
       return new VisionToolkitError('capacity', message)
     }
-    if (/not found|only PNG|unsupported|cannot open|empty region|must be|expects|invalid colour|needs at least/i.test(result.stderr)) {
+    if (/not found|only PNG|unsupported|cannot open|empty region|must be|expects|invalid colour|needs at least/i.test(stderr)) {
       return new VisionToolkitError('input', message)
     }
-    if (/requires Pillow|requires numpy|requires vtracer|no Chrome|capture failed/i.test(result.stderr)) {
+    if (/requires Pillow|requires numpy|requires vtracer|no Chrome|capture failed/i.test(stderr)) {
       return new VisionToolkitError('runtime', message)
     }
     return new VisionToolkitError(

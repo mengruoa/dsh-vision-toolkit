@@ -540,8 +540,15 @@ const FORMAT_BY_EXTENSION = new Map([
 ])
 const HEX_COLOR_PATTERN = /^#[0-9A-F]{6}$/
 
-/** Error codes a provider retries within its attempt budget (429 is handled separately). */
-const RETRYABLE_CODES: ReadonlySet<VisionToolkitErrorCode> = new Set(['service', 'timeout'])
+/**
+ * Error codes a provider retries against the SAME provider within its
+ * `attempts` budget. Only transient failures are worth re-requesting: a
+ * timeout may clear on the next attempt and a 5xx / network drop is usually
+ * ephemeral. Deterministic failures (auth, quota, rate_limit, invalid_request,
+ * region, tos) must fail over to the next provider immediately instead of
+ * re-requesting a backend that cannot succeed with the same input.
+ */
+const RETRYABLE_CODES: ReadonlySet<VisionToolkitErrorCode> = new Set(['timeout', 'server', 'network'])
 
 /** Resolve as soon as `signal` aborts (or immediately when already aborted). */
 function untilAbort(signal: AbortSignal): Promise<void> {
@@ -1393,6 +1400,22 @@ export class VisionToolkitRuntime {
   }
 
   /**
+   * Advance to the next provider after one provider reached a terminal
+   * failure. This is what makes failover work for FAST failures too: the
+   * hedge timer only launches the next provider when the current one is SLOW
+   * (crosses t1), so a quick auth/5xx/network failure must explicitly launch
+   * the successor. Never advances when a higher-priority provider superseded
+   * this task, when the whole operation was cancelled, or when the global
+   * deadline has too little room left for another request. `launch` is
+   * idempotent, so an earlier hedge timer cannot cause a double launch.
+   */
+  private advanceAfterFailure(task: ProviderTask, operation: OperationContext, launchNext: () => void): void {
+    if (task.abort.signal.aborted || operation.signal.aborted) return
+    if (operation.deadlineAt - Date.now() < this.config.minAvailableSeconds * 1000) return
+    launchNext()
+  }
+
+  /**
    * Run one provider to a terminal state: retryable errors retry within
    * `attempts`, a single request crossing t1 hedges the next provider, and the
    * provider is terminated once its cumulative time reaches t2. A 429 parks the
@@ -1424,6 +1447,7 @@ export class VisionToolkitRuntime {
         if (budget < minAvailableMs) {
           task.status = 'failed'
           task.error = new VisionToolkitError('timeout', `${tool}: ${provider.name} has insufficient remaining time`)
+          this.advanceAfterFailure(task, operation, launchNext)
           return
         }
         const reqDeadline = createDeadline(AbortSignal.any([operation.signal, task.abort.signal]), budget)
@@ -1462,6 +1486,7 @@ export class VisionToolkitRuntime {
           if (reqDeadline.timedOut) {
             task.status = 'failed'
             task.error = new VisionToolkitError('timeout', `${tool}: ${provider.name} exhausted its t2 budget`)
+            this.advanceAfterFailure(task, operation, launchNext)
             return
           }
           if (classified.code === 'rate_limit') {
@@ -1476,6 +1501,7 @@ export class VisionToolkitRuntime {
           }
           task.status = 'failed'
           task.error = classified
+          this.advanceAfterFailure(task, operation, launchNext)
           return
         } finally {
           reqDeadline.cleanup()

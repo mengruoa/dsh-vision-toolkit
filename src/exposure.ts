@@ -8,7 +8,7 @@
 
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
-import type { Session } from '@deepseek-ai/dsh-session'
+import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import { defineTool, type ToolDefinition } from '@deepseek-ai/dsh-tools'
 import type { Context } from '@deepseek-ai/cordis'
 import { VISION_SKILLS_CONTENT, VISION_SKILLS_NAME } from './skill.ts'
@@ -78,10 +78,24 @@ function isBundledSkillResult(value: unknown): boolean {
     && isBundledSkillContent(value.content)
 }
 
+/**
+ * Iterate a Session's durable event log across runtime lines. dsh 0.1.2-alpha
+ * replaced the `events` getter with `snapshotEvents()` (session-log-read-intent):
+ * iterating the removed `session.events` throws `session.events is not iterable`
+ * and takes down `agent/created` → session restore. Prefer the snapshot accessor
+ * and fall back to the legacy rc-line `events` getter so both lines work.
+ */
+function sessionEventLog(session: Session): readonly SessionEvent[] {
+  const snapshot = (session as { snapshotEvents?: () => readonly SessionEvent[] }).snapshotEvents
+  return typeof snapshot === 'function'
+    ? snapshot.call(session)
+    : (session as { events: readonly SessionEvent[] }).events
+}
+
 /** Whether durable history proves that this Session loaded the bundled Skill. */
 function hasLoadedVisionSkill(session: Session): boolean {
   const nativeCalls = new Set<string>()
-  for (const event of session.events) {
+  for (const event of sessionEventLog(session)) {
     if (event.type === 'user/message') {
       const source = event.data.source
       if (source.kind === 'skill-invocation'

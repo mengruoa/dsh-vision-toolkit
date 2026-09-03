@@ -4,6 +4,19 @@ All notable user-facing changes to DSH Vision Toolkit are documented in this fil
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-09-03
+
+### Added
+
+- Merged upstream `v0.1.40`: shared-storage root (`storageDir`) feature with a plugin-owned `storage-domain` sidecar so persisted pasted-image and artifact paths survive read-only Settings changes and Profile restarts; runtime health checks now cover the credential, artifact directory, and temporary directory; the local multi-provider Settings UI is kept (the upstream single-provider credential field assertion is dropped).
+- Expanded the remote provider failure taxonomy with machine-routable error categories: `auth`, `quota`, `rate_limit`, `server`, `network`, `region`, `tos`, and `invalid_request`, each classified from the provider output (401/403 → auth, 402 → quota, 429 → rate_limit, 5xx → server, connection failures → network, region/ToS/HTTP 400–422 → their own categories).
+
+### Fixed
+
+- Fixed being unable to enter a conversation under DSH `v0.1.2-alpha.4`: that version replaced the `Session.events` getter with `snapshotEvents()` (session-log-read-intent), and iterating the removed getter threw `session.events is not iterable`, which took down `agent/created` → session restore. The durable event log is now read via `snapshotEvents()` with a fallback to the legacy `events` getter, so both runtime lines restore correctly.
+- The failover loop now retries only transient failures in place (`timeout`, `server`, `network`) and fails over immediately on deterministic ones (auth, quota, rate_limit, `invalid_request`, region, tos) instead of re-requesting a backend that cannot succeed with the same input.
+- Fast failures now advance to the next provider: previously the hedge timer only launched a successor when the current provider was slow (crossed `t1`), so a quick auth/5xx/network failure could stall failover; a new advance step launches the next provider unless superseded, cancelled, or the remaining budget is too small.
+
 ## [0.1.3] - 2026-09-01
 
 ### Added

@@ -5,18 +5,41 @@
  * @module dsh-vision-toolkit/errors
  */
 
-/** Discriminant tag for every Vision Toolkit failure. */
+/**
+ * Discriminant tag for every Vision Toolkit failure.
+ *
+ * The remote vision-provider failures are split by a machine-routable taxonomy
+ * so the failover loop can decide, per error, whether to retry the SAME
+ * provider or advance to the next one:
+ *
+ * - `auth`           401/403 — credential is wrong or unauthorized. Never retry.
+ * - `quota`          402 — account out of quota/unpaid. Never retry.
+ * - `rate_limit`     429 — throttled. Park and revisit, never retry in place.
+ * - `server`         5xx — transient provider fault. Worth a same-provider retry.
+ * - `network`        connection refused / DNS / socket — transient. Worth a retry.
+ * - `region`         provider unavailable in this region. Never retry.
+ * - `tos`            rejected by content/safety policy. Never retry.
+ * - `invalid_request` 400/404/422 — bad request or unknown model. Never retry.
+ * - `service`        fallback for unclassifiable remote failures. Never retry.
+ */
 export const VISION_TOOLKIT_ERROR_CODES = [
   'config',
   'input',
   'capacity',
+  'auth',
+  'quota',
+  'rate_limit',
+  'server',
+  'network',
+  'region',
+  'tos',
+  'invalid_request',
   'service',
   'runtime',
   'output',
   'timeout',
   'cancelled',
   'path',
-  'rate_limit',
 ] as const
 
 /** Stable machine-readable error category. */
