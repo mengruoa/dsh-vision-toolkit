@@ -6,12 +6,7 @@
 
 # DSH Vision Toolkit
 
-<a href="https://trendshift.io/repositories/149708?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-149708" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/149708/daily?language=TypeScript" alt="Anionex%2Fdsh-vision-toolkit | Trendshift" width="250" height="55"/></a>
-
-[![由 dshfind 推荐](https://img.shields.io/badge/%E7%94%B1%20dshfind-%E6%8E%A8%E8%8D%90-FFD700?style=flat-square)](https://dshfind.com/zh/plugins/Anionex/dsh-vision-toolkit)
-[![dshfind 评分：94——最高分插件](https://img.shields.io/badge/dshfind%20%E8%AF%84%E5%88%86-94%20%7C%20%E6%9C%80%E9%AB%98%E5%88%86%E6%8F%92%E4%BB%B6-5B4CF0?style=flat-square)](https://dshfind.com/zh/plugins/Anionex/dsh-vision-toolkit)
 [![npm](https://img.shields.io/npm/v/@mengruo/dsh-vision-toolkit?style=flat-square&color=5B4CF0)](https://www.npmjs.com/package/@mengruo/dsh-vision-toolkit)
-
 [![MIT](https://img.shields.io/badge/license-MIT-0B7285?style=flat-square)](LICENSE)
 [![DSH](https://img.shields.io/badge/DSH-Web%20%2B%20Headless-5B4CF0?style=flat-square)](cordis.patch.yml)
 
@@ -19,17 +14,13 @@
 
 🚀 粘贴图片，直接提问 ｜ 一行命令安装即用 ｜ 场景丰富
 
-[亮点](#亮点) ｜ [快速开始](#快速开始三步完成) ｜ [工具一览](#工具一览) ｜ [配置与限制](#配置与限制) ｜ [常见问题](#常见问题) ｜ [交流群](#开发与社区)
+[亮点](#亮点) ｜ [快速开始](#快速开始三步完成) ｜ [工具一览](#工具一览) ｜ [配置与限制](#配置与限制) ｜ [常见问题](#常见问题) ｜ [开发](#开发)
 
 🌐 [English](README.md) ｜ **中文**
 
 </div>
 
-🏆 本项目为deepseek harness生态首个综合性视觉工具插件：内测前已立项，并在内测期间参考本人的[`agent-vision-toolkit`](https://github.com/Anionex/agent-vision-toolkit)做出。
-
-> **原创声明：** 这套视觉工具的体系和划分方式，以及 `vision-skills` Skill，均由作者个人原创并持续打磨，相关工具、方法和工作流来自长期的真实使用与反复迭代。
-
-> 如果这个项目对你有帮助，或给了你一些灵感，欢迎 Star 🌟 & Fork。
+> **上游：** [Anionex/dsh-vision-toolkit](https://github.com/Anionex/dsh-vision-toolkit) —— 本仓库是该项目的 fork。
 
 ## 亮点
 
@@ -38,9 +29,7 @@
 - **不只是看图描述，是获取图中真正需要关注的内容。** 模型不只是生成通用描述，而是围绕“报错在哪里”“按钮在哪”等当前任务提取证据。
 - **一套经过实战验证的视觉任务方法论**：项目提供的skill，会告诉 agent 面对不同视觉任务时应该看什么、选择哪个工具、按什么步骤推进，以及最后如何验证结果。
 
-[`agent-vision-toolkit`](https://github.com/Anionex/agent-vision-toolkit) 的视觉能力不只停留在图片描述：Agent 可以读取、定位、裁剪、描摹、还原和验证视觉内容。DSH Vision Toolkit 是这套工具箱面向 DeepSeek Harness 的原生接入，让它进入 Web 和 Headless Profile。
-
-本项目提供两层能力：
+本项目把一整套视觉任务方法论带进 DeepSeek Harness，提供两层能力：
 
 1. **视觉工具和 Skill**：让 Agent 知道什么时候该看图、定位、OCR、裁剪、描摹或做像素对比。
 2. **DSH 原生接入**：把这些能力放进 Profile、会话、Settings、Artifacts 和 Web 界面。
@@ -48,28 +37,6 @@
 ```sh
 dsh plugin --profile web add @mengruo/dsh-vision-toolkit
 ```
-
-**上游工具箱：** [Anionex/agent-vision-toolkit](https://github.com/Anionex/agent-vision-toolkit) · **项目网站：** [agent-vision.anionex.me](https://agent-vision.anionex.me)
-
-## ❤️ 赞助
-
-> 想赞助本项目？详见 [FUNDING.md](FUNDING.md) 或发送邮件到 davidyang042@gmail.com。
-
-<details open>
-<summary>点击折叠</summary>
-
-<table>
-<tr>
-<td width="220" align="center" valign="middle"><a href="https://aihubmix.com/?aff=sinZ"><img src="assets/logo_aihubmix.png" alt="AIHubMix" height="48"></a></td>
-<td valign="middle">感谢 <a href="https://aihubmix.com/?aff=sinZ">AIHubMix</a> 赞助本项目！AIHubMix 是稳定、高并发的 AI 大模型 API 聚合平台，一个 API Key 即可接入 Claude、GPT、Gemini、DeepSeek 等主流模型，兼容多种协议，并提供<b>免费模型选择</b>。注册时，海外用户请使用 <a href="https://aihubmix.com/?aff=sinZ">AIHubMix 入口</a>，中国大陆用户请使用 <a href="https://inferera.com/?aff=sinZ">Inferera 入口</a>。</td>
-</tr>
-<tr>
-<td width="220" align="center" valign="middle"><a href="https://api.ewo.so/register?aff=U6PT7J"><img src="assets/logo_eapi_dark.png" alt="E-API" height="48"></a></td>
-<td valign="middle">感谢 <a href="https://api.ewo.so/register?aff=U6PT7J">E-API</a> 赞助本项目！E-API 聚合主流 AI 模型，兼容 OpenAI、Anthropic 与 Codex 接口；部分 Claude 模型相比官方价<b>最高优惠约 98%</b>，DeepSeek V4 系列<b>优惠约 25%</b>。</td>
-</tr>
-</table>
-
-</details>
 
 **目录**
 
@@ -81,8 +48,7 @@ dsh plugin --profile web add @mengruo/dsh-vision-toolkit
 - [工具一览](#工具一览)
 - [配置与限制](#配置与限制)
 - [常见问题](#常见问题)
-- [赞赏](#赞赏)
-- [开发与社区](#开发与社区)
+- [开发](#开发)
 
 ## 最近更新
 
@@ -308,27 +274,11 @@ flowchart LR
 
 不会。每次检查只把必要的意图和图片发给多模态模型，调用之间不会累积上下文，因此额外成本很小。想进一步降低成本，可以用本地部署的小型多模态侧模型（例如 Gemma 4 或 Qwen 3.5/3.6 系列）提供视觉能力。
 
-## 赞赏
+## 开发
 
-如果本项目对你有价值，欢迎请开发者喝杯咖啡☕️
-
-<img width="240" alt="微信收款码" src="assets/wechat-reward.png" />
-
-## 开发与社区
-
-- 贡献前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
-- Bug、功能建议和使用问题请提交到 [GitHub Issues](https://github.com/mengruoa/dsh-vision-toolkit/issues)；渠道说明见 [SUPPORT.md](SUPPORT.md)。
-- 安全漏洞请按 [SECURITY.md](SECURITY.md) 私下报告。
-- 版本变化见 [CHANGELOG.md](CHANGELOG.md)，赞助说明见 [FUNDING.md](FUNDING.md)。
-- 通用视觉工具、跨 Agent 接入和视觉任务方法论请访问上游 [agent-vision-toolkit](https://github.com/Anionex/agent-vision-toolkit)。
-
-<p align="center">
-  <img src="assets/community-group-qr.png" alt="agent-vision-toolkit 项目交流群二维码" width="240" />
-</p>
-
-我是 [anionex](https://anionex.me/)，一位 AI 原生开发者，曾位列 GitHub 全球开发者趋势榜第 **3** 名，项目累计超过 16k stars。想了解我后续的工作，欢迎在 [GitHub](https://github.com/Anionex) 关注我。
-
-[`agent-vision-toolkit`](https://github.com/Anionex/agent-vision-toolkit) 由 [Anionex](https://anionex.me/) 创建。本仓库维护它面向 DeepSeek Harness 的原生集成。
+- Bug、功能建议和使用问题请提交到 [GitHub Issues](https://github.com/mengruoa/dsh-vision-toolkit/issues)。
+- 版本变化见 [CHANGELOG.md](CHANGELOG.md)。
+- 本仓库是 [Anionex/dsh-vision-toolkit](https://github.com/Anionex/dsh-vision-toolkit) 的 fork；如有合适的改动欢迎回馈给上游。
 
 ## 许可证
 

@@ -6,12 +6,6 @@
 
 # DSH Vision Toolkit
 
-<a href="https://trendshift.io/repositories/149708?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-149708" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/149708/daily?language=TypeScript" alt="Anionex%2Fdsh-vision-toolkit | Trendshift" width="250" height="55"/></a>
-
-[![Recommended by dshfind](https://img.shields.io/badge/recommended%20by-dshfind-FFD700?style=flat-square)](https://dshfind.com/en/plugins/Anionex/dsh-vision-toolkit)
-[![dshfind score: 94 — highest-rated plugin](https://img.shields.io/badge/dshfind%20score-94%20%7C%20highest--rated%20plugin-5B4CF0?style=flat-square)](https://dshfind.com/en/plugins/Anionex/dsh-vision-toolkit)
-[![agentic leaderboard](https://www.theagenticleaderboard.com/badges/new/dsh-vision-toolkit.svg)](https://www.theagenticleaderboard.com)
-
 [![npm](https://img.shields.io/npm/v/@mengruo/dsh-vision-toolkit?style=flat-square&color=5B4CF0)](https://www.npmjs.com/package/@mengruo/dsh-vision-toolkit)
 [![MIT](https://img.shields.io/badge/license-MIT-0B7285?style=flat-square)](LICENSE)
 [![DSH](https://img.shields.io/badge/DSH-Web%20%2B%20Headless-5B4CF0?style=flat-square)](cordis.patch.yml)
@@ -20,17 +14,13 @@
 
 🚀 Paste an image and ask directly | Install with one command | Broad use cases
 
-[Highlights](#highlights) | [Quick start](#quick-start-three-steps) | [Toolbox](#toolbox) | [Configuration and limits](#configuration-and-limits) | [Troubleshooting](#troubleshooting) | [Community](#development-and-community)
+[Highlights](#highlights) | [Quick start](#quick-start-three-steps) | [Toolbox](#toolbox) | [Configuration and limits](#configuration-and-limits) | [Troubleshooting](#troubleshooting) | [Development](#development)
 
 🌐 **English** | [中文](README.zh.md)
 
 </div>
 
-🏆 This project is the first comprehensive vision-tool plugin in the DeepSeek Harness ecosystem: it was initiated before internal beta and built during the beta with reference to [`agent-vision-toolkit`](https://github.com/Anionex/agent-vision-toolkit).
-
-> **Original work:** The system and division of responsibilities behind these visual tools, together with the `vision-skills` Skill, were personally created and continuously refined by the author through long-term real-world use and repeated iteration.
-
-> If this project helps you or gives you some inspiration, feel free to star 🌟 & fork.
+> **Upstream:** [Anionex/dsh-vision-toolkit](https://github.com/Anionex/dsh-vision-toolkit) — this is a fork of that project.
 
 ## Highlights
 
@@ -39,9 +29,7 @@
 - **Not just a caption — the content that matters.** The model does not produce a generic description; it extracts evidence around the current task, such as “Where is the error?” or “Where is the button?”.
 - **A battle-tested visual-task methodology.** The bundled Skill tells the agent what to look at for different visual tasks, which tool to choose, how to proceed, and how to verify the result.
 
-[`agent-vision-toolkit`](https://github.com/Anionex/agent-vision-toolkit) gives an agent more than image captions: it can read, locate, crop, trace, rebuild, and verify visual work. DSH Vision Toolkit is its native DeepSeek Harness integration, bringing that workflow into Web and Headless Profiles.
-
-This project has two layers:
+This project brings a visual-task working method into DeepSeek Harness. It has two layers:
 
 1. **Visual tools and a Skill:** the agent learns when to inspect, ground, OCR, crop, trace, or compare pixels.
 2. **Native DSH integration:** those capabilities live inside Profiles, sessions, Settings, Artifacts, and the Web UI.
@@ -49,28 +37,6 @@ This project has two layers:
 ```sh
 dsh plugin --profile web add @mengruo/dsh-vision-toolkit
 ```
-
-**Upstream toolkit:** [Anionex/agent-vision-toolkit](https://github.com/Anionex/agent-vision-toolkit) · **Project website:** [agent-vision.anionex.me](https://agent-vision.anionex.me)
-
-## ❤️ Sponsor
-
-> Want to sponsor this project? See [FUNDING.md](FUNDING.md) or email davidyang042@gmail.com.
-
-<details open>
-<summary>Click to collapse</summary>
-
-<table>
-<tr>
-<td width="220" align="center" valign="middle"><a href="https://aihubmix.com/?aff=sinZ"><img src="assets/logo_aihubmix.png" alt="AIHubMix" height="48"></a></td>
-<td valign="middle">Thanks to <a href="https://aihubmix.com/?aff=sinZ">AIHubMix</a> for sponsoring this project! AIHubMix is a stable, high-concurrency AI model API gateway that connects Claude, GPT, Gemini, DeepSeek, and other mainstream models through a single API key, compatible with multiple protocols, with <b>free model options</b> available. To sign up, use the <a href="https://aihubmix.com/?aff=sinZ">AIHubMix entry</a> outside mainland China or the <a href="https://inferera.com/?aff=sinZ">Inferera entry</a> within mainland China.</td>
-</tr>
-<tr>
-<td width="220" align="center" valign="middle"><a href="https://api.ewo.so/register?aff=U6PT7J"><img src="assets/logo_eapi_dark.png" alt="E-API" height="48"></a></td>
-<td valign="middle">Thanks to <a href="https://api.ewo.so/register?aff=U6PT7J">E-API</a> for sponsoring this project! E-API aggregates mainstream AI models behind OpenAI-, Anthropic-, and Codex-compatible APIs, with selected Claude models up to <b>98% below official prices</b> and DeepSeek V4 models about <b>25% below official prices</b>.</td>
-</tr>
-</table>
-
-</details>
 
 **Contents**
 
@@ -82,8 +48,7 @@ dsh plugin --profile web add @mengruo/dsh-vision-toolkit
 - [Toolbox](#toolbox)
 - [Configuration and limits](#configuration-and-limits)
 - [Troubleshooting](#troubleshooting)
-- [Donation](#donation)
-- [Development and community](#development-and-community)
+- [Development](#development)
 
 ## Recent updates
 
@@ -310,27 +275,11 @@ For advanced setups — overriding `runtime.python`, using `runtime.mode: extern
 
 No. Each inspection sends only the necessary intent and the image to the multimodal model, and context does not accumulate across calls, so the added cost stays small. To reduce it further, a locally deployed small multimodal side model (for example the Gemma 4 or Qwen 3.5/3.6 series) can provide the vision capability.
 
-## Donation
+## Development
 
-If this project is valuable to you, you are welcome to buy the developer a coffee ☕️
-
-<img width="240" alt="WeChat reward code" src="assets/wechat-reward.png" />
-
-## Development and community
-
-- Read [CONTRIBUTING.md](CONTRIBUTING.md) before contributing.
-- Use [GitHub Issues](https://github.com/mengruoa/dsh-vision-toolkit/issues) for bugs, focused feature requests, and usage questions; see [SUPPORT.md](SUPPORT.md) for channel guidance.
-- Report vulnerabilities privately through [SECURITY.md](SECURITY.md).
-- See [CHANGELOG.md](CHANGELOG.md) for releases and [FUNDING.md](FUNDING.md) for sponsorship details.
-- Visit upstream [agent-vision-toolkit](https://github.com/Anionex/agent-vision-toolkit) for the general toolkit, cross-agent integrations, and visual-task playbooks.
-
-<p align="center">
-  <img src="assets/community-group-qr.png" alt="QR code for the agent-vision-toolkit community group" width="240" />
-</p>
-
-I'm [anionex](https://anionex.me/), an AI-native developer who once ranked **No. 3** on GitHub's global developer trending list, with more than 16k stars across my projects. If you would like to follow my future work, [follow me on GitHub](https://github.com/Anionex).
-
-[`agent-vision-toolkit`](https://github.com/Anionex/agent-vision-toolkit) was created by [Anionex](https://anionex.me/). This repository maintains its native DeepSeek Harness integration.
+- Use [GitHub Issues](https://github.com/mengruoa/dsh-vision-toolkit/issues) for bugs, focused feature requests, and usage questions.
+- See [CHANGELOG.md](CHANGELOG.md) for release history.
+- This is a fork of [Anionex/dsh-vision-toolkit](https://github.com/Anionex/dsh-vision-toolkit); when relevant, changes can be contributed back upstream.
 
 ## License
 
