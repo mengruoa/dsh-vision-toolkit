@@ -276,6 +276,8 @@ You can also configure a Profile patch:
 
 OpenAI Chat Completions-compatible endpoints and Anthropic Messages are supported. The Web Settings panel exposes the full provider, runtime, timeout, image-limit, and image-input-variant configuration.
 
+Requests are non-streaming by default. For endpoints with weak non-streaming support or that time out on long outputs, set `stream: true` on an individual provider (or enable the "Streaming" toggle in Web Settings) to request the completion over SSE. Streamed responses are accumulated into the full text inside the Python client before returning, so the tool interface and result shape are unchanged.
+
 The advanced **Default save directory** setting can place artifacts, pasted images, and caches below an absolute POSIX shared root such as `/tmp/dsh-vision-toolkit`; the plugin creates a private mode-0700 child for the current user and workspace. Leaving it blank keeps the existing workspace-local `.dsh-vision-toolkit` directory. Configured shared roots are currently rejected on Windows because their ownership and access-control lists cannot yet be verified safely.
 
 When the configured save directory changes, the plugin retains earlier validated roots as read-only input locations. Web Profiles persist that history in the plugin-owned `vision_toolkit_storage` storage-domain sidecar, including when the active Settings provider is read-only, so existing pasted-image paths remain usable after a Profile restart. Custom Profiles should compose `@deepseek-ai/dsh-storage-domain` when they use configured shared storage.

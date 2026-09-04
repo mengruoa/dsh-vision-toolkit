@@ -968,6 +968,7 @@ export class VisionToolkitRuntime {
       VISION_API_PROTOCOL: provider.protocol === 'anthropic' ? 'anthropic' : 'chat_completions',
       VISION_ANTHROPIC_THINKING: provider.anthropicThinking,
       ...(sslVerify === undefined ? {} : { VISION_SSL_VERIFY: sslVerify }),
+      ...(provider.stream ? { VISION_STREAM: '1' } : {}),
       VISION_USER_AGENT: provider.userAgent,
       LANG: this.config.language,
     }
@@ -984,6 +985,7 @@ export class VisionToolkitRuntime {
         protocol: provider.protocol,
         anthropicThinking: provider.anthropicThinking,
         userAgent: provider.userAgent,
+        stream: provider.stream,
       })
         ? { value: BUILT_IN_FREE_VISION_KEY, source: 'built-in' }
         : await this.ctx.credentials.resolve(provider.credential)
@@ -1603,6 +1605,7 @@ export class VisionToolkitRuntime {
         protocol: env.VISION_API_PROTOCOL,
         anthropicThinking: env.VISION_ANTHROPIC_THINKING,
         sslVerify: env.VISION_SSL_VERIFY ?? null,
+        stream: env.VISION_STREAM === '1',
         userAgent: env.VISION_USER_AGENT,
         credentialSha256: createHash('sha256').update(env.VISION_API_KEY).digest('hex'),
         maxImageBytes: provider.maxImageBytes,

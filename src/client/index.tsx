@@ -42,6 +42,7 @@ const en = {
   providers: 'Vision providers',
   name: 'Label',
   enabled: 'Enabled',
+  disabled: 'Disabled',
   priority: 'Priority {index}',
   attempts: 'Attempts',
   attemptsHint: 'Total attempts against this provider before failing over to the next one.',
@@ -70,6 +71,8 @@ const en = {
   anthropicThinking: 'Anthropic thinking',
   anthropicThinkingHint: 'omit has the broadest compatibility. Use disabled or adaptive only when the selected model documents that mode; restore omit first after HTTP 400.',
   userAgent: 'User-Agent',
+  stream: 'Streaming',
+  streamHint: 'Request a streamed (SSE) completion instead of one JSON response. Use it for endpoints with weak non-streaming support or that time out on long outputs.',
   language: 'Output language',
   limits: 'Timeout and concurrency',
   timeout: 'Request timeout (ms)',
@@ -258,6 +261,7 @@ const zh: Record<LocaleKey, string> = {
   providers: '视觉服务列表',
   name: '名称',
   enabled: '启用',
+  disabled: '禁用',
   priority: '优先级 {index}',
   attempts: '尝试次数',
   attemptsHint: '该服务在故障转移到下一个之前最多尝试的次数。',
@@ -286,6 +290,8 @@ const zh: Record<LocaleKey, string> = {
   anthropicThinking: 'Anthropic thinking',
   anthropicThinkingHint: 'omit 兼容性最好。仅当所选模型明确支持时使用 disabled 或 adaptive；遇到 HTTP 400 时先恢复 omit。',
   userAgent: 'User-Agent',
+  stream: '流式请求',
+  streamHint: '以流式（SSE）方式请求补全，而非一次性返回 JSON。适合对非流式支持不佳、长输出易连接超时的端点。',
   language: '结果语言',
   limits: '超时与并发限制',
   timeout: '单次请求超时（毫秒）',
@@ -527,6 +533,7 @@ interface ProviderValue {
   protocol?: 'openai' | 'anthropic'
   anthropicThinking?: 'omit' | 'disabled' | 'adaptive'
   userAgent?: string
+  stream?: boolean
   t1Seconds?: number
   t2Seconds?: number
   maxImageBytes?: number
@@ -543,6 +550,7 @@ interface SettingsValue {
     protocol?: 'openai' | 'anthropic'
     anthropicThinking?: 'omit' | 'disabled' | 'adaptive'
     userAgent?: string
+    stream?: boolean
   }
   providers?: ProviderValue[]
   language?: 'zh' | 'en'
@@ -1171,6 +1179,7 @@ interface ProviderDraft {
   protocol: 'openai' | 'anthropic'
   anthropicThinking: 'omit' | 'disabled' | 'adaptive'
   userAgent: string
+  stream: boolean
   t1Seconds: string
   t2Seconds: string
   maxImageBytes: string
@@ -1231,6 +1240,7 @@ function emptyProviderDraft(defaults: ProviderDefaults): ProviderDraft {
     protocol: 'openai',
     anthropicThinking: 'omit',
     userAgent: DEFAULT_USER_AGENT,
+    stream: false,
     t1Seconds: '90',
     t2Seconds: '90',
     maxImageBytes: String(defaults.maxImageBytes),
@@ -1253,6 +1263,7 @@ function providerDraftOf(value: ProviderValue | undefined, fallback: ProviderVal
     protocol: source?.protocol ?? 'openai',
     anthropicThinking: source?.anthropicThinking ?? 'omit',
     userAgent: source?.userAgent ?? DEFAULT_USER_AGENT,
+    stream: source?.stream === true,
     t1Seconds: String(source?.t1Seconds ?? 90),
     t2Seconds: String(source?.t2Seconds ?? 90),
     maxImageBytes: String(source?.maxImageBytes ?? defaults.maxImageBytes),
@@ -1320,6 +1331,7 @@ function valueOf(draft: Draft, t: Translate): SettingsValue {
     protocol: provider.protocol,
     anthropicThinking: provider.anthropicThinking,
     ...(provider.userAgent.trim() === DEFAULT_USER_AGENT ? {} : { userAgent: provider.userAgent.trim() }),
+    ...(provider.stream ? { stream: true } : {}),
     ...(provider.t1Seconds.trim().length === 0 ? {} : { t1Seconds: positiveInteger(provider.t1Seconds, t('t1'), t) }),
     ...(provider.t2Seconds.trim().length === 0 ? {} : { t2Seconds: positiveInteger(provider.t2Seconds, t('t2'), t) }),
     ...(provider.maxImageBytes.trim().length === 0 ? {} : { maxImageBytes: positiveInteger(provider.maxImageBytes, t('maxBytes'), t) }),
@@ -1336,6 +1348,7 @@ function valueOf(draft: Draft, t: Translate): SettingsValue {
       protocol: primary?.protocol ?? 'openai',
       anthropicThinking: primary?.anthropicThinking ?? 'omit',
       userAgent: primary?.userAgent.trim() || DEFAULT_USER_AGENT,
+      stream: primary?.stream === true,
     },
     providers,
     language: draft.language,
@@ -1667,6 +1680,7 @@ function LoadedSettings({ controller, t }: SettingsInjected) {
               <Field label={t('protocol')}><select aria-label={t('protocol')} disabled={!snapshot.writable || busy} value={selectedProvider.protocol} onChange={(event) => { updateProvider(selectedIndex, 'protocol', event.target.value as 'openai' | 'anthropic') }}><option value="openai">OpenAI Chat Completions</option><option value="anthropic">Anthropic Messages</option></select></Field>
               {selectedProvider.protocol === 'anthropic' ? <Field label={t('anthropicThinking')} hint={t('anthropicThinkingHint')}><select aria-label={t('anthropicThinking')} value={selectedProvider.anthropicThinking} onChange={(event) => { updateProvider(selectedIndex, 'anthropicThinking', event.target.value as 'omit' | 'disabled' | 'adaptive') }}><option value="omit">omit (widest compatibility)</option><option value="disabled">disabled (model support required)</option><option value="adaptive">adaptive (model support required)</option></select></Field> : null}
               <Field label={t('userAgent')}><Input aria-label={t('userAgent')} value={selectedProvider.userAgent} onChange={(event) => { updateProvider(selectedIndex, 'userAgent', event.target.value) }} /></Field>
+              <Field label={t('stream')} hint={t('streamHint')}><select aria-label={t('stream')} disabled={!snapshot.writable || busy} value={selectedProvider.stream ? 'enabled' : 'disabled'} onChange={(event) => { updateProvider(selectedIndex, 'stream', event.target.value === 'enabled') }}><option value="disabled">{t('disabled')}</option><option value="enabled">{t('enabled')}</option></select></Field>
               <Field label={t('t1')} hint={t('t1Hint')}><Input aria-label={t('t1')} inputMode="numeric" value={selectedProvider.t1Seconds} onChange={(event) => { updateProvider(selectedIndex, 't1Seconds', event.target.value) }} /></Field>
               <Field label={t('t2')} hint={t('t2Hint')}><Input aria-label={t('t2')} inputMode="numeric" value={selectedProvider.t2Seconds} onChange={(event) => { updateProvider(selectedIndex, 't2Seconds', event.target.value) }} /></Field>
               <Field label={t('maxBytes')}><Input aria-label={t('maxBytes')} inputMode="numeric" value={selectedProvider.maxImageBytes} onChange={(event) => { updateProvider(selectedIndex, 'maxImageBytes', event.target.value) }} /></Field>

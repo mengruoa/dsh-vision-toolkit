@@ -3,7 +3,7 @@
   "repository": "https://github.com/Anionex/agent-vision-toolkit",
   "version": "v0.1.0+snapshot.bc9803d",
   "commit": "bc9803d7d6300c864d17460ecbb33540b26638e0",
-  "contentSha256": "0eaa22a0d1d0dd6d6523a0ddd3fa8197246005042bc164a703fb05102b287a38",
+  "contentSha256": "5e5d2fb33c76e3ee8cad12e3af0b847a23a02820dd880ed97d8ec3fc890f2282",
   "files": [
     {
       "path": "CHANGELOG.md",
@@ -82,13 +82,13 @@
     },
     {
       "path": "tests/test_vision_client.py",
-      "bytes": 20481,
-      "sha256": "b019f0da28b7567226292044f791059ee34d7f0088bd9ceb328cfa1bab250a48"
+      "bytes": 24882,
+      "sha256": "87e39429766b38caed6a4ccb1ac8b193094c69858a0f7541940a005f66421e45"
     },
     {
       "path": "vision_client.py",
-      "bytes": 11838,
-      "sha256": "c6a48048c864e99513faf90ba17c4ac0d9462bb718683682ed8eda12c0e2cfe0"
+      "bytes": 15053,
+      "sha256": "6800843b99df500a476b1dd6ff5a4c05aa8122ed990f6f91b16a11ee07bdebe6"
     }
   ]
 }

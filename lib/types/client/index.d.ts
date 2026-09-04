@@ -13,6 +13,7 @@ declare const en: {
     readonly providers: "Vision providers";
     readonly name: "Label";
     readonly enabled: "Enabled";
+    readonly disabled: "Disabled";
     readonly priority: "Priority {index}";
     readonly attempts: "Attempts";
     readonly attemptsHint: "Total attempts against this provider before failing over to the next one.";
@@ -41,6 +42,8 @@ declare const en: {
     readonly anthropicThinking: "Anthropic thinking";
     readonly anthropicThinkingHint: "omit has the broadest compatibility. Use disabled or adaptive only when the selected model documents that mode; restore omit first after HTTP 400.";
     readonly userAgent: "User-Agent";
+    readonly stream: "Streaming";
+    readonly streamHint: "Request a streamed (SSE) completion instead of one JSON response. Use it for endpoints with weak non-streaming support or that time out on long outputs.";
     readonly language: "Output language";
     readonly limits: "Timeout and concurrency";
     readonly timeout: "Request timeout (ms)";
@@ -260,6 +263,7 @@ interface ProviderValue {
     protocol?: 'openai' | 'anthropic';
     anthropicThinking?: 'omit' | 'disabled' | 'adaptive';
     userAgent?: string;
+    stream?: boolean;
     t1Seconds?: number;
     t2Seconds?: number;
     maxImageBytes?: number;
@@ -275,6 +279,7 @@ interface SettingsValue {
         protocol?: 'openai' | 'anthropic';
         anthropicThinking?: 'omit' | 'disabled' | 'adaptive';
         userAgent?: string;
+        stream?: boolean;
     };
     providers?: ProviderValue[];
     language?: 'zh' | 'en';

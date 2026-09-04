@@ -21,6 +21,7 @@ describe('resolveConfig', () => {
     expect(config.provider.protocol).toBe('openai')
     expect(config.provider.anthropicThinking).toBe('omit')
     expect(config.provider.userAgent).toBe(DEFAULT_VISION_USER_AGENT)
+    expect(config.provider.stream).toBe(false)
     expect(config.language).toBe('zh')
     expect(config.hardTimeoutSeconds).toBe(180)
     expect(config.sessionMaxConcurrency).toBe(6)
@@ -115,6 +116,7 @@ describe('resolveConfig', () => {
         protocol: 'anthropic',
         anthropicThinking: 'disabled',
         userAgent: 'custom-vision-client/2.0',
+        stream: true,
       },
       language: 'en',
       runtime: { mode: 'external', agentVisionToolkitPath: '/tmp/toolkit', python: 'python3.12' },
@@ -130,6 +132,7 @@ describe('resolveConfig', () => {
     expect(config.provider.protocol).toBe('anthropic')
     expect(config.provider.anthropicThinking).toBe('disabled')
     expect(config.provider.userAgent).toBe('custom-vision-client/2.0')
+    expect(config.provider.stream).toBe(true)
     expect(config.allowedDirs).toEqual(['~/Pictures'])
     expect(resolveConfig({ storageDir: '   ' }).storageDir).toBeUndefined()
   })

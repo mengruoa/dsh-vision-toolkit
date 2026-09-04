@@ -77,6 +77,8 @@ export interface VisionProviderConfig {
   anthropicThinking?: 'omit' | 'disabled' | 'adaptive'
   /** Outbound User-Agent for provider requests and connection tests. */
   userAgent?: string
+  /** Whether to request a streamed (SSE) completion instead of one JSON response (default false). */
+  stream?: boolean
   /** t1: per-request hedge threshold in seconds. A single request exceeding t1 keeps running while the next provider starts in parallel. */
   t1Seconds?: number
   /** t2: per-provider cumulative cutoff in seconds. Total accumulated request time reaching t2 terminates the provider. */
@@ -106,6 +108,8 @@ export interface VisionToolkitConfig {
     anthropicThinking?: 'omit' | 'disabled' | 'adaptive'
     /** Outbound User-Agent for provider requests and connection tests. */
     userAgent?: string
+    /** Whether to request a streamed (SSE) completion instead of one JSON response (default false). */
+    stream?: boolean
   }
   /** Ordered online vision providers; array order is the failover priority. */
   providers?: VisionProviderConfig[]
@@ -182,6 +186,7 @@ export const Config: Schema<VisionToolkitConfig> = z.object({
     protocol: z.union(['openai', 'anthropic'] as const).default('openai'),
     anthropicThinking: z.union(['omit', 'disabled', 'adaptive'] as const).default('omit'),
     userAgent: z.string().default(DEFAULT_VISION_USER_AGENT),
+    stream: z.boolean().default(false),
   }),
   providers: z.array(z.object({
     name: z.string(),
@@ -193,6 +198,7 @@ export const Config: Schema<VisionToolkitConfig> = z.object({
     protocol: z.union(['openai', 'anthropic'] as const).default('openai'),
     anthropicThinking: z.union(['omit', 'disabled', 'adaptive'] as const).default('omit'),
     userAgent: z.string(),
+    stream: z.boolean().default(false),
     t1Seconds: z.number(),
     t2Seconds: z.number(),
     maxImageBytes: z.number(),
@@ -235,6 +241,7 @@ export interface ResolvedProvider {
   protocol: 'openai' | 'anthropic'
   anthropicThinking: 'omit' | 'disabled' | 'adaptive'
   userAgent: string
+  stream: boolean
   t1Seconds: number
   t2Seconds: number
   maxImageBytes: number
@@ -252,6 +259,7 @@ export interface ResolvedVisionToolkitConfig {
     protocol: 'openai' | 'anthropic'
     anthropicThinking: 'omit' | 'disabled' | 'adaptive'
     userAgent: string
+    stream: boolean
   }
   /** Ordered failover pool; array order is the priority, highest first. */
   providers: ResolvedProvider[]
@@ -366,6 +374,7 @@ function resolveProvider(
   if (userAgent.length === 0) {
     throw new VisionToolkitError('config', `${label}.userAgent must not be empty`)
   }
+  const stream = input.stream === true
   const t1Seconds = input.t1Seconds ?? 90
   if (!Number.isInteger(t1Seconds) || t1Seconds < 1 || t1Seconds > MAX_TIMEOUT_SECONDS) {
     throw new VisionToolkitError('config', `${label}.t1Seconds must be an integer between 1 and ${MAX_TIMEOUT_SECONDS}`)
@@ -402,6 +411,7 @@ function resolveProvider(
     protocol,
     anthropicThinking,
     userAgent,
+    stream,
     t1Seconds,
     t2Seconds,
     maxImageBytes,
@@ -494,6 +504,7 @@ export function resolveConfig(config: VisionToolkitConfig = {}): ResolvedVisionT
       protocol: primary.protocol,
       anthropicThinking: primary.anthropicThinking,
       userAgent: primary.userAgent,
+      stream: primary.stream,
     },
     providers,
     language,

@@ -408,6 +408,94 @@ def main():
             os.environ.pop("VISION_API_PROTOCOL", None)
         assert Handler.calls == 0
 
+        # VISION_STREAM truthiness mirrors VISION_SSL_VERIFY: off by default.
+        for enabled_value in ("1", "true", "yes", "on", " TRUE "):
+            os.environ["VISION_STREAM"] = enabled_value
+            assert vision_client._stream_enabled() is True
+        for disabled_value in ("", "0", "false", "no", "off", "disabled"):
+            os.environ["VISION_STREAM"] = disabled_value
+            assert vision_client._stream_enabled() is False
+        os.environ.pop("VISION_STREAM", None)
+
+        # Streamed chat_completions: `stream: true` is sent and deltas accumulate.
+        Handler.calls, Handler.statuses, Handler.bodies, Handler.response_headers = 0, [200], [
+            (
+                'data: {"choices":[{"delta":{"content":"Hello "}}]}\n\n'
+                'data: {"choices":[{"delta":{"content":"streamed"}}]}\n\n'
+                'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n'
+                'data: [DONE]\n\n'
+            ).encode(),
+        ], []
+        os.environ["VISION_STREAM"] = "1"
+        try:
+            assert vision_client.describe_image("data:image/png;base64,AAAA") == "Hello streamed"
+        finally:
+            os.environ.pop("VISION_STREAM", None)
+        assert json.loads(Handler.last_body)["stream"] is True
+        assert Handler.calls == 1
+
+        # Default is non-streaming: no `stream` key is sent.
+        Handler.calls, Handler.statuses, Handler.bodies = 0, [200], []
+        vision_client.describe_image("data:image/png;base64,AAAA")
+        assert "stream" not in json.loads(Handler.last_body)
+        assert Handler.calls == 1
+
+        # Anthropic streaming: text_delta deltas accumulate across blocks.
+        Handler.calls, Handler.statuses, Handler.bodies, Handler.response_headers = 0, [200], [
+            (
+                'data: {"type":"message_start","message":{"id":"m1"}}\n\n'
+                'data: {"type":"content_block_start","index":0,"content_block":{"type":"text"}}\n\n'
+                'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"anthropic "}}\n\n'
+                'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"streamed"}}\n\n'
+                'data: {"type":"content_block_stop","index":0}\n\n'
+                'data: {"type":"message_stop"}\n\n'
+            ).encode(),
+        ], []
+        os.environ["VISION_API_PROTOCOL"] = "anthropic"
+        os.environ["VISION_STREAM"] = "1"
+        try:
+            assert vision_client.describe_image("data:image/png;base64,AAAA") == "anthropic streamed"
+        finally:
+            os.environ.pop("VISION_API_PROTOCOL", None)
+            os.environ.pop("VISION_STREAM", None)
+        assert json.loads(Handler.last_body)["stream"] is True
+        assert Handler.calls == 1
+
+        # Responses streaming: output_text deltas accumulate.
+        Handler.calls, Handler.statuses, Handler.bodies, Handler.response_headers = 0, [200], [
+            (
+                'data: {"type":"response.output_text.delta","delta":"responses "}\n\n'
+                'data: {"type":"response.output_text.delta","delta":"streamed"}\n\n'
+                'data: {"type":"response.completed"}\n\n'
+            ).encode(),
+        ], []
+        os.environ["VISION_API_PROTOCOL"] = "responses"
+        os.environ["VISION_STREAM"] = "1"
+        try:
+            assert vision_client.describe_image("data:image/png;base64,AAAA") == "responses streamed"
+        finally:
+            os.environ.pop("VISION_API_PROTOCOL", None)
+            os.environ.pop("VISION_STREAM", None)
+        assert json.loads(Handler.last_body)["stream"] is True
+        assert Handler.calls == 1
+
+        # A streamed error event surfaces as a redacted VisionError.
+        Handler.calls, Handler.statuses, Handler.bodies = 0, [200], [
+            b'data: {"error":{"message":"overloaded for test-key","code":"overloaded"}}\n\n'
+        ]
+        os.environ["VISION_STREAM"] = "1"
+        try:
+            try:
+                vision_client.describe_image("data:image/png;base64,AAAA")
+            except vision_client.VisionError as exc:
+                assert "test-key" not in str(exc)
+                assert "<redacted>" in str(exc)
+            else:
+                raise AssertionError("streamed errors must fail cleanly")
+        finally:
+            os.environ.pop("VISION_STREAM", None)
+        assert Handler.calls == 1
+
         Handler.calls, Handler.statuses, Handler.bodies = 0, [200], []
         with tempfile.TemporaryDirectory() as raw:
             image = Path(raw) / "fixture.png"

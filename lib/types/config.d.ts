@@ -33,6 +33,8 @@ export interface VisionProviderConfig {
     anthropicThinking?: 'omit' | 'disabled' | 'adaptive';
     /** Outbound User-Agent for provider requests and connection tests. */
     userAgent?: string;
+    /** Whether to request a streamed (SSE) completion instead of one JSON response (default false). */
+    stream?: boolean;
     /** t1: per-request hedge threshold in seconds. A single request exceeding t1 keeps running while the next provider starts in parallel. */
     t1Seconds?: number;
     /** t2: per-provider cumulative cutoff in seconds. Total accumulated request time reaching t2 terminates the provider. */
@@ -61,6 +63,8 @@ export interface VisionToolkitConfig {
         anthropicThinking?: 'omit' | 'disabled' | 'adaptive';
         /** Outbound User-Agent for provider requests and connection tests. */
         userAgent?: string;
+        /** Whether to request a streamed (SSE) completion instead of one JSON response (default false). */
+        stream?: boolean;
     };
     /** Ordered online vision providers; array order is the failover priority. */
     providers?: VisionProviderConfig[];
@@ -141,6 +145,7 @@ export interface ResolvedProvider {
     protocol: 'openai' | 'anthropic';
     anthropicThinking: 'omit' | 'disabled' | 'adaptive';
     userAgent: string;
+    stream: boolean;
     t1Seconds: number;
     t2Seconds: number;
     maxImageBytes: number;
@@ -157,6 +162,7 @@ export interface ResolvedVisionToolkitConfig {
         protocol: 'openai' | 'anthropic';
         anthropicThinking: 'omit' | 'disabled' | 'adaptive';
         userAgent: string;
+        stream: boolean;
     };
     /** Ordered failover pool; array order is the priority, highest first. */
     providers: ResolvedProvider[];

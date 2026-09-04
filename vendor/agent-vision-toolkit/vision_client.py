@@ -196,6 +196,77 @@ def _retryable_http_error(status: int, body: bytes) -> bool:
     }
 
 
+def _stream_enabled() -> bool:
+    """Whether VISION_STREAM asks for a streamed completion (default off)."""
+    value = os.environ.get("VISION_STREAM", "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _stream_error(payload: dict) -> str | None:
+    """Return a human-readable error detail from one SSE event, or None."""
+    error = payload.get("error")
+    if isinstance(error, dict):
+        code = error.get("code")
+        message = error.get("message")
+        if code is not None or message is not None:
+            return str(message) if message is not None else str(code)
+        return json.dumps(error)
+    if payload.get("type") == "error":
+        error = payload.get("error")
+        if isinstance(error, dict) and error.get("message") is not None:
+            return str(error["message"])
+    return None
+
+
+def _stream_text(stream, protocol: str, api_key: str) -> str:
+    """Accumulate the text deltas of a server-sent-events completion stream."""
+    parts: list[str] = []
+    error_detail: str | None = None
+    for raw_line in stream:
+        if isinstance(raw_line, (bytes, bytearray)):
+            line = raw_line.decode("utf-8", errors="replace")
+        else:
+            line = str(raw_line)
+        line = line.strip()
+        if not line or line.startswith(":"):
+            continue
+        data = line[5:].strip() if line.startswith("data:") else line
+        if data == "[DONE]":
+            break
+        try:
+            payload = json.loads(data)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        error_detail = _stream_error(payload)
+        if error_detail is not None:
+            break
+        if protocol == "anthropic":
+            if payload.get("type") == "content_block_delta":
+                delta = payload.get("delta")
+                if isinstance(delta, dict) and delta.get("type") == "text_delta":
+                    text = delta.get("text")
+                    if isinstance(text, str):
+                        parts.append(text)
+        elif protocol == "responses":
+            if payload.get("type") == "response.output_text.delta":
+                delta = payload.get("delta")
+                if isinstance(delta, str):
+                    parts.append(delta)
+        else:  # chat_completions
+            choices = payload.get("choices")
+            if isinstance(choices, list) and choices:
+                choice = choices[0]
+                delta = choice.get("delta") if isinstance(choice, dict) else None
+                content = delta.get("content") if isinstance(delta, dict) else None
+                if isinstance(content, str):
+                    parts.append(content)
+    if error_detail is not None:
+        raise VisionError(f"Vision API stream error: {_redact(error_detail, api_key)}")
+    return "".join(parts)
+
+
 def describe_image(image_url: str | list[str], prompt: str | None = None, max_tokens: int = 4096,
                    apply_lang: bool = True) -> str:
     """Describe one data/http image URL (str) or several (list) in a single call."""
@@ -216,6 +287,7 @@ def describe_image(image_url: str | list[str], prompt: str | None = None, max_to
             text = f"{instruction}\n\n{text}"
     model = _required("VISION_MODEL")
     protocol = os.environ.get("VISION_API_PROTOCOL", "").strip().lower() or "chat_completions"
+    stream = _stream_enabled()
     if protocol == "responses":
         payload = {
             "model": model,
@@ -263,6 +335,8 @@ def describe_image(image_url: str | list[str], prompt: str | None = None, max_to
         raise VisionError(
             "Unsupported VISION_API_PROTOCOL; use chat_completions, responses, or anthropic"
         )
+    if stream:
+        payload["stream"] = True
     headers = {
         "Content-Type": "application/json",
         "User-Agent": user_agent,
@@ -280,12 +354,16 @@ def describe_image(image_url: str | list[str], prompt: str | None = None, max_to
     timeout = 180
     for attempt in range(retries + 1):
         try:
-            with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
-                data = json.load(response)
-            try:
-                text = extract_text(data)
-            except (KeyError, IndexError, TypeError) as exc:
-                raise VisionError("Vision API returned an incompatible response structure") from exc
+            if stream:
+                with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
+                    text = _stream_text(response, protocol, api_key)
+            else:
+                with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
+                    data = json.load(response)
+                try:
+                    text = extract_text(data)
+                except (KeyError, IndexError, TypeError) as exc:
+                    raise VisionError("Vision API returned an incompatible response structure") from exc
             if not text:
                 raise VisionError("Vision API returned an empty description")
             return text
