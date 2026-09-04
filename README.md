@@ -27,6 +27,7 @@
 - **Paste an image and ask directly.** In DSH Web, pasting an image switches the text-only model to its `(Vision Toolkit)` variant automatically — no manual path copying or model changes. Native thumbnails, session history, and workspace paths stay intact; Web can preview artifacts.
 - **One command to install.** After installation, configure a vision provider in **Settings → Vision Toolkit** and start using the tools.
 - **Not just a caption — the content that matters.** The model does not produce a generic description; it extracts evidence around the current task, such as “Where is the error?” or “Where is the button?”.
+- **More than one provider, with fallback.** Configure multiple vision providers; routes, streaming, and automatic fallback are handled by policy for better availability and stability.
 - **A battle-tested visual-task methodology.** The bundled Skill tells the agent what to look at for different visual tasks, which tool to choose, how to proceed, and how to verify the result.
 
 This project brings a visual-task working method into DeepSeek Harness. It has two layers:
@@ -41,7 +42,6 @@ dsh plugin --profile web add @mengruo/dsh-vision-toolkit
 **Contents**
 
 - [Highlights](#highlights)
-- [Recent updates](#recent-updates)
 - [Who it is for](#who-it-is-for)
 - [See it in action](#see-it-in-action)
 - [Quick start: three steps](#quick-start-three-steps)
@@ -49,16 +49,6 @@ dsh plugin --profile web add @mengruo/dsh-vision-toolkit
 - [Configuration and limits](#configuration-and-limits)
 - [Troubleshooting](#troubleshooting)
 - [Development](#development)
-
-## Recent updates
-
-- **2026-08-20 · AIHubMix setup guide:** Added a screenshot-based guide for getting an API key through the Inferera entry and configuring the Gemini 3.7 Flash vision model; Settings now links directly to this guide.
-- **2026-08-19 · Transparent routing by default:** The model selector keeps one entry per model with the original name, and image input (paste, history, `read_image`) works without manually switching to a `(Vision Toolkit)` variant. Disable “Transparent variant routing” in advanced settings → image input to restore the explicit entries.
-- **2026-08-16 · Windows Python:** Added Microsoft Store Python support, fixing first-time isolated-runtime setup failures for affected Windows users.
-- **2026-08-17 · Vision upgrade:** Switched the default model to Gemini 3.7 Flash and fixed Qwen/Gemini bounding-box coordinate order.
-- **2026-08-16 · Image paste:** Text-only routes now switch to a `(Vision Toolkit)` variant and keep a workspace path, fixing blocked pastes and images that could not be reused later.
-- **2026-08-16 · Service stability:** Expanded service capacity to reduce peak-time `429` responses.
-- **2026-08-16 · Real model test:** Added a full image-request test in Settings, fixing the false confidence caused by a successful `/models` request to a model that still cannot process images.
 
 ## Who it is for
 
