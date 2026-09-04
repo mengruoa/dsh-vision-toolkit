@@ -39,6 +39,12 @@ export interface VisionToolkitSettingsSnapshot {
         source?: string;
         writable: boolean;
     }>;
+    /** Object-storage credential state; `ref` is empty when object storage is unset. */
+    objectStorageCredential: {
+        ref: string;
+        configured: boolean;
+        writable: boolean;
+    };
     runtime: RuntimeManagerStatus;
     release: {
         pluginVersion: string;
@@ -84,6 +90,7 @@ export declare class VisionToolkitWebBackend {
     private saveCredential;
     private deleteCredential;
     private health;
+    private testStorage;
     /** Handle the exact Settings route. */
     handle(req: IncomingMessage, res: ServerResponse): Promise<void>;
 }

@@ -4,6 +4,18 @@ All notable user-facing changes to DSH Vision Toolkit are documented in this fil
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-09-04
+
+### Added
+
+- Streaming (SSE) request option per provider: request a streamed completion instead of one JSON response, for endpoints with weak non-streaming support or that time out on long outputs.
+- URL-based image transfer: optional S3-compatible object storage (endpoint, bucket, credential, optional public base URL) plus a per-provider `uploadViaUrl` option. Images are uploaded to object storage and the model receives URLs instead of base64, and the objects are deleted after the operation settles. Region crops fall back to base64. The Settings panel adds object-storage fields and a "test storage" probe (upload → head → delete).
+- Synced upstream vendored scripts (glance, detect, ground) and updated the upstream manifest.
+
+### Changed
+
+- Slimmed down the fork: README cleanup and docs now highlight multi-provider fallback and drop the recent-updates section.
+
 ## [0.1.4] - 2026-09-03
 
 ### Added

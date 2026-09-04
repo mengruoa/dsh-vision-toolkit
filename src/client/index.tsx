@@ -31,6 +31,8 @@ const DEFAULT_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKi
 const BUILT_IN_FREE_VISION_BASE_URL = 'https://vision.anionex.me/v1'
 const BUILT_IN_FREE_VISION_CREDENTIAL = 'ANIONEX_FREE_VISION'
 const BUILT_IN_FREE_VISION_MODEL = 'gemini-3.7-flash'
+// Fixed credential reference holding the combined "accessKeyId:secretAccessKey".
+const OBJECT_STORAGE_CREDENTIAL = 'VISION_OBJECT_STORAGE'
 
 const en = {
   nav: 'Vision',
@@ -73,6 +75,8 @@ const en = {
   userAgent: 'User-Agent',
   stream: 'Streaming',
   streamHint: 'Request a streamed (SSE) completion instead of one JSON response. Use it for endpoints with weak non-streaming support or that time out on long outputs.',
+  uploadViaUrl: 'Transfer images via URL',
+  uploadViaUrlHint: 'Upload each image to the configured object storage and send the model a URL instead of base64. Requires object storage (below); region crops fall back to base64.',
   language: 'Output language',
   limits: 'Timeout and concurrency',
   timeout: 'Request timeout (ms)',
@@ -98,10 +102,24 @@ const en = {
   storageDirHint: 'Leave blank to keep .dsh-vision-toolkit in each workspace. On POSIX systems, set an absolute shared root such as /tmp/dsh-vision-toolkit to store artifacts, pasted images, and caches in an automatically generated per-user, workspace-specific child directory. Windows shared roots remain disabled until their ACLs can be verified safely.',
   allowedDirs: 'Additional allowed directories',
   allowedDirsHint: 'One path per line. The session workspace is always allowed.',
+  objectStorage: 'Object storage',
+  objectStorageHint: 'S3-compatible storage used when a provider enables URL image transfer. The access key is stored as a DSH credential and never shown again after saving.',
+  storageEndpoint: 'Endpoint',
+  storageBucket: 'Bucket',
+  storageAccessKeyId: 'Access Key ID',
+  storageSecretAccessKey: 'Secret Access Key',
+  storagePublicBase: 'Public base URL (optional)',
+  storagePublicBaseHint: 'Custom domain or r2.dev URL for permanent public links. Leave blank to use temporary presigned URLs.',
+  testStorage: 'Test object storage',
+  testingStorage: 'Testing…',
+  storageKeyPair: 'Access Key ID and Secret Access Key must both be filled together.',
   save: 'Save and apply',
   saving: 'Validating runtime…',
   reload: 'Reload',
   saved: 'Settings validated and applied.',
+  unsavedChanges: 'Changed but not saved',
+  discardChanges: 'Discard changes',
+  noUnsavedChanges: 'Settings unchanged',
   readOnly: 'Service settings are read-only. A writable API key can still be saved.',
   configured: 'Configured',
   missing: 'Missing',
@@ -292,6 +310,8 @@ const zh: Record<LocaleKey, string> = {
   userAgent: 'User-Agent',
   stream: '流式请求',
   streamHint: '以流式（SSE）方式请求补全，而非一次性返回 JSON。适合对非流式支持不佳、长输出易连接超时的端点。',
+  uploadViaUrl: '通过 URL 传输图片',
+  uploadViaUrlHint: '把每张图片上传到下方配置的对象存储，将 URL 传给模型而不是 base64。需要先配置对象存储；使用 region 裁剪时回退为 base64。',
   language: '结果语言',
   limits: '超时与并发限制',
   timeout: '单次请求超时（毫秒）',
@@ -317,10 +337,24 @@ const zh: Record<LocaleKey, string> = {
   storageDirHint: '留空时继续在各工作区创建 .dsh-vision-toolkit。在 POSIX 系统上填写绝对路径共享根目录（例如 /tmp/dsh-vision-toolkit）后，产物、粘贴图片和缓存会保存到自动生成的当前用户、工作区专属子目录中。Windows 共享目录会保持禁用，直到能够安全校验 ACL 权限。',
   allowedDirs: '允许读取的其他目录',
   allowedDirsHint: '每行填写一个目录。当前会话的工作目录始终可以读取，无需重复填写。',
+  objectStorage: '对象存储',
+  objectStorageHint: '用于「通过 URL 传输图片」的 S3 兼容存储。访问密钥以 DSH 凭据保存，保存后不再显示。',
+  storageEndpoint: 'Endpoint',
+  storageBucket: 'Bucket',
+  storageAccessKeyId: 'Access Key ID',
+  storageSecretAccessKey: 'Secret Access Key',
+  storagePublicBase: '公网 URL 前缀（可选）',
+  storagePublicBaseHint: '自定义域名或 r2.dev 地址，用于生成永久公网链接。留空则使用临时预签名 URL。',
+  testStorage: '测试对象存储',
+  testingStorage: '测试中…',
+  storageKeyPair: 'Access Key ID 与 Secret Access Key 必须同时填写。',
   save: '保存设置',
   saving: '正在检查并应用…',
   reload: '重新加载',
   saved: '设置已保存并生效。',
+  unsavedChanges: '已更改但尚未保存',
+  discardChanges: '丢弃更改',
+  noUnsavedChanges: '设置项未变更',
   readOnly: '服务设置来自只读配置；如果 API 密钥可写，仍可在此保存密钥。',
   configured: '已就绪',
   missing: '未配置',
@@ -534,6 +568,7 @@ interface ProviderValue {
   anthropicThinking?: 'omit' | 'disabled' | 'adaptive'
   userAgent?: string
   stream?: boolean
+  uploadViaUrl?: boolean
   t1Seconds?: number
   t2Seconds?: number
   maxImageBytes?: number
@@ -551,6 +586,7 @@ interface SettingsValue {
     anthropicThinking?: 'omit' | 'disabled' | 'adaptive'
     userAgent?: string
     stream?: boolean
+    uploadViaUrl?: boolean
   }
   providers?: ProviderValue[]
   language?: 'zh' | 'en'
@@ -560,6 +596,12 @@ interface SettingsValue {
   maxImageBytes?: number
   maxImagePixels?: number
   concurrency?: number
+  objectStorage?: {
+    endpoint?: string
+    bucket?: string
+    credential?: string
+    publicBase?: string
+  }
   runtime?: { mode?: 'managed' | 'external'; agentVisionToolkitPath?: string; python?: string }
   storageDir?: string
   storageHistory?: string[]
@@ -619,6 +661,7 @@ interface SettingsSnapshot {
   settings: { value: SettingsValue; revision: number; applies: 'live' }
   credential: { ref: string; configured: boolean; source?: string; writable: boolean }
   credentials: Array<{ ref: string; configured: boolean; source?: string; writable: boolean }>
+  objectStorageCredential: { ref: string; configured: boolean; writable: boolean }
   runtime: {
     ready: boolean
     generation: number
@@ -754,6 +797,15 @@ function VisionIcon({ kind = 'scan' }: { kind?: 'scan' | 'target' | 'layers' | '
   return (
     <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round">
       <path d={path} />
+    </svg>
+  )
+}
+
+function ReloadIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+      <path d="M21 3v5h-5" />
     </svg>
   )
 }
@@ -996,7 +1048,8 @@ interface SettingsState {
   providerHealth?: Record<number, HealthResult> | undefined
   update?: PluginUpdateCheck | undefined
   restart?: PluginUpdateResult | undefined
-  action?: 'save' | 'health' | 'connection' | 'model' | 'check-update' | 'apply-update' | undefined
+  storageTest?: { detail: string } | undefined
+  action?: 'save' | 'health' | 'connection' | 'model' | 'check-update' | 'apply-update' | 'test-storage' | undefined
   message?: string | undefined
   error?: string | undefined
 }
@@ -1131,6 +1184,20 @@ export class VisionSettingsController {
     }
   }
 
+  async testStorage(): Promise<void> {
+    this.set({ ...this.state, action: 'test-storage', error: undefined, message: undefined })
+    try {
+      const result = await apiRequest<{ detail: string }>({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'test-storage' }),
+      })
+      this.set({ ...this.state, action: undefined, storageTest: result })
+    } catch (error) {
+      this.set({ ...this.state, action: undefined, error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
   async checkUpdate(): Promise<void> {
     this.set({ ...this.state, action: 'check-update', error: undefined, message: undefined })
     try {
@@ -1180,6 +1247,7 @@ interface ProviderDraft {
   anthropicThinking: 'omit' | 'disabled' | 'adaptive'
   userAgent: string
   stream: boolean
+  uploadViaUrl: boolean
   t1Seconds: string
   t2Seconds: string
   maxImageBytes: string
@@ -1197,6 +1265,9 @@ interface Draft {
   maxImageBytes: string
   maxImagePixels: string
   concurrency: string
+  storageEndpoint: string
+  storageBucket: string
+  storagePublicBase: string
   runtimeMode: 'managed' | 'external'
   toolkitPath: string
   python: string
@@ -1241,6 +1312,7 @@ function emptyProviderDraft(defaults: ProviderDefaults): ProviderDraft {
     anthropicThinking: 'omit',
     userAgent: DEFAULT_USER_AGENT,
     stream: false,
+    uploadViaUrl: false,
     t1Seconds: '90',
     t2Seconds: '90',
     maxImageBytes: String(defaults.maxImageBytes),
@@ -1264,6 +1336,7 @@ function providerDraftOf(value: ProviderValue | undefined, fallback: ProviderVal
     anthropicThinking: source?.anthropicThinking ?? 'omit',
     userAgent: source?.userAgent ?? DEFAULT_USER_AGENT,
     stream: source?.stream === true,
+    uploadViaUrl: source?.uploadViaUrl === true,
     t1Seconds: String(source?.t1Seconds ?? 90),
     t2Seconds: String(source?.t2Seconds ?? 90),
     maxImageBytes: String(source?.maxImageBytes ?? defaults.maxImageBytes),
@@ -1292,6 +1365,9 @@ function draftOf(value: SettingsValue): Draft {
     maxImageBytes: String(globalDefaults.maxImageBytes),
     maxImagePixels: String(globalDefaults.maxImagePixels),
     concurrency: String(globalDefaults.concurrency),
+    storageEndpoint: value.objectStorage?.endpoint ?? '',
+    storageBucket: value.objectStorage?.bucket ?? '',
+    storagePublicBase: value.objectStorage?.publicBase ?? '',
     runtimeMode: value.runtime?.mode ?? 'managed',
     toolkitPath: value.runtime?.agentVisionToolkitPath ?? '',
     python: value.runtime?.python ?? '',
@@ -1332,6 +1408,7 @@ function valueOf(draft: Draft, t: Translate): SettingsValue {
     anthropicThinking: provider.anthropicThinking,
     ...(provider.userAgent.trim() === DEFAULT_USER_AGENT ? {} : { userAgent: provider.userAgent.trim() }),
     ...(provider.stream ? { stream: true } : {}),
+    ...(provider.uploadViaUrl ? { uploadViaUrl: true } : {}),
     ...(provider.t1Seconds.trim().length === 0 ? {} : { t1Seconds: positiveInteger(provider.t1Seconds, t('t1'), t) }),
     ...(provider.t2Seconds.trim().length === 0 ? {} : { t2Seconds: positiveInteger(provider.t2Seconds, t('t2'), t) }),
     ...(provider.maxImageBytes.trim().length === 0 ? {} : { maxImageBytes: positiveInteger(provider.maxImageBytes, t('maxBytes'), t) }),
@@ -1349,6 +1426,7 @@ function valueOf(draft: Draft, t: Translate): SettingsValue {
       anthropicThinking: primary?.anthropicThinking ?? 'omit',
       userAgent: primary?.userAgent.trim() || DEFAULT_USER_AGENT,
       stream: primary?.stream === true,
+      uploadViaUrl: primary?.uploadViaUrl === true,
     },
     providers,
     language: draft.language,
@@ -1358,6 +1436,16 @@ function valueOf(draft: Draft, t: Translate): SettingsValue {
     maxImageBytes: positiveInteger(draft.maxImageBytes, t('maxBytes'), t),
     maxImagePixels: positiveInteger(draft.maxImagePixels, t('maxPixels'), t),
     concurrency: positiveInteger(draft.concurrency, t('concurrency'), t),
+    ...(draft.storageEndpoint.trim().length === 0 && draft.storageBucket.trim().length === 0
+      ? {}
+      : {
+        objectStorage: {
+          endpoint: draft.storageEndpoint.trim(),
+          bucket: draft.storageBucket.trim(),
+          credential: OBJECT_STORAGE_CREDENTIAL,
+          ...(draft.storagePublicBase.trim().length === 0 ? {} : { publicBase: draft.storagePublicBase.trim() }),
+        },
+      }),
     runtime: {
       mode: draft.runtimeMode,
       ...(draft.runtimeMode === 'external' ? { agentVisionToolkitPath: draft.toolkitPath.trim() } : {}),
@@ -1487,6 +1575,7 @@ function LoadedSettings({ controller, t }: SettingsInjected) {
   const [draft, setDraft] = useState<Draft | undefined>(undefined)
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [keys, setKeys] = useState<Record<string, string>>({})
+  const [storageKeys, setStorageKeys] = useState<{ accessKeyId: string; secretAccessKey: string }>({ accessKeyId: '', secretAccessKey: '' })
   const [draftError, setDraftError] = useState<string | undefined>(undefined)
   const [copiedCommand, setCopiedCommand] = useState(false)
 
@@ -1595,9 +1684,18 @@ function LoadedSettings({ controller, t }: SettingsInjected) {
           return
         }
       }
+      const accessKeyId = storageKeys.accessKeyId.trim()
+      const secretAccessKey = storageKeys.secretAccessKey.trim()
+      if ((accessKeyId.length === 0) !== (secretAccessKey.length === 0)) {
+        setDraftError(t('storageKeyPair'))
+        return
+      }
       const credentials = Object.entries(keys)
         .filter(([, value]) => value.trim().length > 0)
         .map(([ref, value]) => ({ ref, value: value.trim() }))
+      if (accessKeyId.length > 0 && (draft.storageEndpoint.trim().length > 0 || draft.storageBucket.trim().length > 0)) {
+        credentials.push({ ref: OBJECT_STORAGE_CREDENTIAL, value: `${accessKeyId}:${secretAccessKey}` })
+      }
       const savedRefs = new Set(credentials.map(credential => credential.ref))
       setDraftError(undefined)
       void controller.save(
@@ -1608,11 +1706,18 @@ function LoadedSettings({ controller, t }: SettingsInjected) {
       ).then(saved => {
         if (saved) {
           setKeys(current => Object.fromEntries(Object.entries(current).filter(([ref]) => !savedRefs.has(ref))))
+          if (savedRefs.has(OBJECT_STORAGE_CREDENTIAL)) setStorageKeys({ accessKeyId: '', secretAccessKey: '' })
         }
       })
     } catch (error) {
       setDraftError(error instanceof Error ? error.message : String(error))
     }
+  }
+  const discard = (): void => {
+    setDraft(draftOf(snapshot.settings.value))
+    setKeys({})
+    setStorageKeys({ accessKeyId: '', secretAccessKey: '' })
+    setDraftError(undefined)
   }
   const busy = state.action !== undefined
   const selectedProvider = draft.providers[selectedIndex]
@@ -1621,14 +1726,18 @@ function LoadedSettings({ controller, t }: SettingsInjected) {
   const selectedKey = selectedProvider === undefined ? '' : (keys[selectedProvider.credential] ?? '')
   const selectedKeyLocked = selectedCredential !== undefined && !selectedCredential.writable
   const selectedBuiltInFree = selectedCredential?.source === 'built-in-free'
-  const canSave = snapshot.writable || Object.values(keys).some(value => value.trim().length > 0)
+  const objectStorageCredential = snapshot.objectStorageCredential ?? { ref: '', configured: false, writable: false }
+  const canSave = snapshot.writable || Object.values(keys).some(value => value.trim().length > 0) || storageKeys.accessKeyId.trim().length > 0 || storageKeys.secretAccessKey.trim().length > 0
   const runtimeErrorTitle = snapshot.runtime.ready ? t('runtimeCandidateRejected') : t('runtimeUnavailable')
   const pluginUpdate = state.update
   const updateCapability = pluginUpdate ?? snapshot.release.update
   const latestVersion = pluginUpdate?.latestVersion
   const updateReason = updateCapability.reason === undefined ? undefined : t(UPDATE_REASON_KEYS[updateCapability.reason])
   const updateCheckSupported = updateCapability.checkSupported ?? updateCapability.supported
-  const updateHasUnsavedChanges = Object.values(keys).some(value => value.trim().length > 0) || settingsDraftChanged(draft, snapshot.settings.value, t)
+  const updateHasUnsavedChanges = Object.values(keys).some(value => value.length > 0)
+    || storageKeys.accessKeyId.length > 0
+    || storageKeys.secretAccessKey.length > 0
+    || settingsDraftChanged(draft, snapshot.settings.value, t)
   const manualUpdateProfile = updateCapability.profile ?? 'web'
   const manualUpdateCommand = `dsh plugin --profile ${manualUpdateProfile} add @mengruo/dsh-vision-toolkit@latest --registry=https://registry.npmjs.org/`
   const copyManualUpdate = (): void => {
@@ -1648,6 +1757,18 @@ function LoadedSettings({ controller, t }: SettingsInjected) {
 
   return (
     <div className="dvt-settings">
+      <div className="dvt-save-dock" data-dirty={updateHasUnsavedChanges ? 'true' : undefined}>
+        <button type="button" className="dvt-save-dock-reload" aria-label={t('reload')} title={t('reload')} disabled={busy} onClick={() => { void controller.load() }}><ReloadIcon /></button>
+        {updateHasUnsavedChanges ? (
+          <>
+            <span className="dvt-save-dock-text">{t('unsavedChanges')}</span>
+            <Button size="sm" variant="outline" disabled={busy} onClick={discard}>{t('discardChanges')}</Button>
+            <Button size="sm" variant="primary" disabled={!canSave || busy} onClick={save}>{state.action === 'save' ? t('saving') : t('save')}</Button>
+          </>
+        ) : (
+          <span className="dvt-save-dock-text">{t('noUnsavedChanges')}</span>
+        )}
+      </div>
       <div className="dvt-alert notice">{t('externalNotice')}</div>
       {!snapshot.writable ? <div className="dvt-alert warning">{t('readOnly')}</div> : null}
       {draftError === undefined ? null : <div className="dvt-alert error">{draftError}</div>}
@@ -1681,6 +1802,7 @@ function LoadedSettings({ controller, t }: SettingsInjected) {
               {selectedProvider.protocol === 'anthropic' ? <Field label={t('anthropicThinking')} hint={t('anthropicThinkingHint')}><select aria-label={t('anthropicThinking')} value={selectedProvider.anthropicThinking} onChange={(event) => { updateProvider(selectedIndex, 'anthropicThinking', event.target.value as 'omit' | 'disabled' | 'adaptive') }}><option value="omit">omit (widest compatibility)</option><option value="disabled">disabled (model support required)</option><option value="adaptive">adaptive (model support required)</option></select></Field> : null}
               <Field label={t('userAgent')}><Input aria-label={t('userAgent')} value={selectedProvider.userAgent} onChange={(event) => { updateProvider(selectedIndex, 'userAgent', event.target.value) }} /></Field>
               <Field label={t('stream')} hint={t('streamHint')}><select aria-label={t('stream')} disabled={!snapshot.writable || busy} value={selectedProvider.stream ? 'enabled' : 'disabled'} onChange={(event) => { updateProvider(selectedIndex, 'stream', event.target.value === 'enabled') }}><option value="disabled">{t('disabled')}</option><option value="enabled">{t('enabled')}</option></select></Field>
+              <Field label={t('uploadViaUrl')} hint={t('uploadViaUrlHint')}><select aria-label={t('uploadViaUrl')} disabled={!snapshot.writable || busy} value={selectedProvider.uploadViaUrl ? 'enabled' : 'disabled'} onChange={(event) => { updateProvider(selectedIndex, 'uploadViaUrl', event.target.value === 'enabled') }}><option value="disabled">{t('disabled')}</option><option value="enabled">{t('enabled')}</option></select></Field>
               <Field label={t('t1')} hint={t('t1Hint')}><Input aria-label={t('t1')} inputMode="numeric" value={selectedProvider.t1Seconds} onChange={(event) => { updateProvider(selectedIndex, 't1Seconds', event.target.value) }} /></Field>
               <Field label={t('t2')} hint={t('t2Hint')}><Input aria-label={t('t2')} inputMode="numeric" value={selectedProvider.t2Seconds} onChange={(event) => { updateProvider(selectedIndex, 't2Seconds', event.target.value) }} /></Field>
               <Field label={t('maxBytes')}><Input aria-label={t('maxBytes')} inputMode="numeric" value={selectedProvider.maxImageBytes} onChange={(event) => { updateProvider(selectedIndex, 'maxImageBytes', event.target.value) }} /></Field>
@@ -1701,8 +1823,6 @@ function LoadedSettings({ controller, t }: SettingsInjected) {
           </div>
         )}
       </section>
-
-      <div className="dvt-save-row"><Button variant="primary" disabled={!canSave || busy} onClick={save}>{state.action === 'save' ? t('saving') : t('save')}</Button><Button variant="outline" disabled={busy} onClick={() => { void controller.load() }}>{t('reload')}</Button></div>
 
       <section className="dvt-panel"><div className="dvt-panel-title"><div><h3>{t('prioritySort')}</h3><p>{t('prioritySortHint')}</p></div></div>
         <div className="dvt-sorter">
@@ -1772,6 +1892,16 @@ function LoadedSettings({ controller, t }: SettingsInjected) {
             <Field label={t('allowedDirs')} hint={t('allowedDirsHint')}><textarea rows={3} value={draft.allowedDirs} onChange={(event) => { update('allowedDirs', event.target.value) }} /></Field>
           </div></section>
 
+          <section className="dvt-panel"><div className="dvt-panel-title"><div><h3>{t('objectStorage')}</h3><p>{t('objectStorageHint')}</p></div><div className="dvt-actions"><Button size="sm" variant="outline" disabled={busy || !snapshot.runtime.ready} onClick={() => { void controller.testStorage() }}>{state.action === 'test-storage' ? t('testingStorage') : t('testStorage')}</Button></div></div><div className="dvt-form-grid">
+            <Field label={t('storageEndpoint')}><Input aria-label={t('storageEndpoint')} disabled={!snapshot.writable || busy} value={draft.storageEndpoint} onChange={(event) => { update('storageEndpoint', event.target.value) }} placeholder="https://<account>.r2.cloudflarestorage.com" /></Field>
+            <Field label={t('storageBucket')}><Input aria-label={t('storageBucket')} disabled={!snapshot.writable || busy} value={draft.storageBucket} onChange={(event) => { update('storageBucket', event.target.value) }} /></Field>
+            <Field label={t('storageAccessKeyId')}><Input aria-label={t('storageAccessKeyId')} type="password" autoComplete="new-password" disabled={busy || !snapshot.writable} placeholder={objectStorageCredential.configured ? t('apiKeyPlaceholderConfigured') : t('apiKeyPlaceholderMissing')} value={storageKeys.accessKeyId} onChange={(event) => { setStorageKeys(current => ({ ...current, accessKeyId: event.target.value })); setDraftError(undefined) }} /></Field>
+            <Field label={t('storageSecretAccessKey')}><Input aria-label={t('storageSecretAccessKey')} type="password" autoComplete="new-password" disabled={busy || !snapshot.writable} placeholder={objectStorageCredential.configured ? t('apiKeyPlaceholderConfigured') : t('apiKeyPlaceholderMissing')} value={storageKeys.secretAccessKey} onChange={(event) => { setStorageKeys(current => ({ ...current, secretAccessKey: event.target.value })); setDraftError(undefined) }} /></Field>
+            <Field label={t('storagePublicBase')} hint={t('storagePublicBaseHint')}><Input aria-label={t('storagePublicBase')} disabled={!snapshot.writable || busy} value={draft.storagePublicBase} onChange={(event) => { update('storagePublicBase', event.target.value) }} placeholder="https://cdn.example.com" /></Field>
+          </div>
+          {state.storageTest === undefined ? null : <div className="dvt-provider-test-result"><div data-status="ok"><span>{t('objectStorage')}</span><strong>{t('statusOk')}</strong><p>{state.storageTest.detail}</p></div></div>}
+          </section>
+
           <section className="dvt-panel"><div className="dvt-panel-title"><h3>{t('runtime')}</h3><span className={`dvt-badge ${snapshot.runtime.ready ? 'ok' : 'error'}`}>{snapshot.runtime.ready ? snapshot.runtime.upstream?.source === 'managed' ? t('runtimeManaged') : snapshot.runtime.upstream?.source === 'external' ? t('runtimeExternal') : t('runtimeReady') : t('runtimeUnavailable')}</span></div><div className="dvt-form-grid">
             <Field label={t('runtimeMode')}><select value={draft.runtimeMode} onChange={(event) => { update('runtimeMode', event.target.value as 'managed' | 'external') }}><option value="managed">{t('runtimeManaged')}</option><option value="external">{t('runtimeExternal')}</option></select></Field>
             {draft.runtimeMode === 'external' ? <Field label={t('toolkitPath')}><Input value={draft.toolkitPath} onChange={(event) => { update('toolkitPath', event.target.value) }} /></Field> : null}
@@ -1796,11 +1926,12 @@ const CSS = `
 .dvt-tool-head{width:100%;min-height:38px;display:flex;align-items:center;gap:7px;padding:8px 10px;border:0;background:transparent;color:inherit;text-align:left;cursor:pointer;font:inherit}.dvt-tool-head:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:-2px}.dvt-tool-icon{width:20px;height:20px;display:grid;place-items:center;border-radius:6px;color:var(--dsw-alias-state-business-primary);background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 12%,transparent);flex:none}.dvt-tool-title{font-size:12px;font-weight:650;white-space:nowrap}.dvt-tool-sep{opacity:.35}.dvt-tool-summary{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--dsw-alias-label-secondary)}.dvt-tool-status{margin-left:auto;font-size:11px;color:var(--dsw-alias-label-secondary);max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dvt-tool[data-state=error] .dvt-tool-status{color:var(--dsw-alias-state-error-primary)}.dvt-chevron{margin-left:auto;transition:transform .16s ease;opacity:.55}.dvt-chevron[data-open=true]{transform:rotate(180deg)}.dvt-tool-body{padding:0 10px 10px}.dvt-stack{display:grid;gap:10px}.dvt-muted{margin:0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.5}
 .dvt-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.dvt-metrics>div,.dvt-diff-score{padding:10px;border-radius:9px;background:var(--dsw-alias-bg-layer-2);display:grid;gap:4px}.dvt-metrics span,.dvt-diff-score span{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--dsw-alias-label-secondary)}.dvt-metrics strong,.dvt-diff-score strong{font-size:13px}.dvt-list{list-style:none;margin:0;padding:0;display:grid;gap:4px;max-height:160px;overflow:auto}.dvt-list li{display:flex;justify-content:space-between;gap:12px;padding:6px 8px;border-radius:7px;background:var(--dsw-alias-bg-layer-2);font-size:11px}.dvt-list code{color:var(--dsw-alias-state-business-primary)}.dvt-table-wrap{max-height:220px;overflow:auto;border:1px solid var(--dsw-alias-border-l1);border-radius:9px}.dvt-table{width:100%;border-collapse:collapse;font-size:11px}.dvt-table th,.dvt-table td{padding:7px 8px;text-align:left;border-bottom:1px solid var(--dsw-alias-border-l1)}.dvt-table th{position:sticky;top:0;background:var(--dsw-alias-bg-layer-2);font-size:10px;text-transform:uppercase;letter-spacing:.05em}.dvt-table tr:last-child td{border-bottom:0}
 .dvt-artifact{border:1px solid var(--dsw-alias-border-l1);border-radius:10px;overflow:hidden;background:var(--dsw-alias-bg-layer-1)}.dvt-preview{display:block;width:100%;max-height:360px;object-fit:contain;background:repeating-conic-gradient(var(--dsw-alias-bg-module-platform) 0 25%,var(--dsw-alias-bg-layer-1) 0 50%) 50%/18px 18px;border:0}.dvt-svg{height:280px}.dvt-artifact-meta{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 10px}.dvt-artifact-meta>div:first-child{min-width:0;display:grid;gap:2px}.dvt-artifact-meta strong{font-size:12px;overflow:hidden;text-overflow:ellipsis}.dvt-artifact-meta span,.dvt-artifact-meta small{font-size:10px;color:var(--dsw-alias-label-secondary)}.dvt-actions{display:flex;align-items:center;gap:7px;flex-wrap:wrap}.dvt-download{display:inline-flex;align-items:center;height:28px;padding:0 12px;border-radius:999px;background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground);text-decoration:none;font-size:12px;font-weight:600}.dvt-download:hover{background:var(--dsw-alias-button-primary-hover)}.dvt-download:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:2px}.dvt-artifact>.dvt-muted{padding:0 10px 10px}.dvt-diff-score>div{height:5px;border-radius:99px;background:var(--dsw-alias-border-l2);overflow:hidden}.dvt-diff-score i{display:block;height:100%;min-width:2px;background:linear-gradient(90deg,var(--dsw-alias-state-warn-primary),var(--dsw-alias-state-error-primary));border-radius:99px}.dvt-tool h4{font-size:11px;margin:0 0 6px}.dvt-palette{display:grid;grid-template-columns:repeat(auto-fit,minmax(112px,1fr));gap:7px}.dvt-palette>div{display:flex;align-items:center;gap:8px;padding:7px;border:1px solid var(--dsw-alias-border-l1);border-radius:9px}.dvt-palette i{width:28px;height:28px;border-radius:7px;box-shadow:inset 0 0 0 1px var(--dsw-alias-border-l2)}.dvt-palette span{display:grid}.dvt-palette strong{font-size:11px}.dvt-palette small{font-size:10px;color:var(--dsw-alias-label-secondary)}
-.dvt-tutorial-link{margin:0;font-size:12px;line-height:1.5}.dvt-tutorial-link a{color:var(--dsw-alias-state-business-primary);text-decoration:none;font-weight:600}.dvt-tutorial-link a:hover{text-decoration:underline}.dvt-manual-update{display:flex;align-items:center;gap:8px;padding:9px 10px;border-radius:9px;background:var(--dsw-alias-bg-layer-2)}.dvt-manual-update code{flex:1;min-width:0;overflow:auto;white-space:nowrap;font-size:11px;color:var(--dsw-alias-label-primary)}.dvt-settings{display:grid;grid-template-columns:minmax(0,1fr);width:100%;max-width:900px;min-width:0;box-sizing:border-box;gap:14px;padding:8px 2px 32px;color:var(--dsw-alias-label-primary)}.dvt-settings-footer{display:flex;justify-content:space-between;gap:20px;align-items:flex-start;padding:8px 2px}.dvt-settings-footer h2{font-size:25px;letter-spacing:-.025em;margin:3px 0 6px}.dvt-settings-footer p{max-width:620px;margin:0;color:var(--dsw-alias-label-secondary);font-size:13px;line-height:1.55}.dvt-kicker{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--dsw-alias-state-business-primary);font-weight:700}.dvt-release{display:grid;gap:4px;min-width:170px;padding:9px 11px;border-radius:10px;background:var(--dsw-alias-bg-layer-2);font-size:10px;color:var(--dsw-alias-label-secondary)}.dvt-release span{display:flex;justify-content:space-between;gap:12px}.dvt-release strong{color:var(--dsw-alias-label-primary)}.dvt-alert{padding:10px 12px;border-radius:10px;font-size:12px;line-height:1.5;display:grid;gap:3px}.dvt-alert.notice{background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 10%,transparent);color:var(--dsw-alias-state-business-primary)}.dvt-alert.warning{background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 12%,transparent);color:var(--dsw-alias-state-warn-label)}.dvt-alert.error{background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 10%,transparent);color:var(--dsw-alias-state-error-primary)}.dvt-alert.success{background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 10%,transparent);color:var(--dsw-alias-state-success-primary)}.dvt-panel{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;padding:15px;border:1px solid var(--dsw-alias-border-l1);border-radius:14px;background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-shadow-lv1)}.dvt-panel-title{display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px}.dvt-panel-title>div:first-child{flex:1 1 320px;min-width:0}.dvt-panel-title>.dvt-actions{margin-left:auto;justify-content:flex-end}.dvt-panel-title h3{font-size:14px;margin:0}.dvt-panel-title p{font-size:11px;line-height:1.45;color:var(--dsw-alias-label-secondary);margin:4px 0 0;max-width:620px}.dvt-badge{font-size:10px;padding:3px 7px;border-radius:999px;font-weight:650}.dvt-badge.ok{background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 12%,transparent);color:var(--dsw-alias-state-success-primary)}.dvt-badge.warning{background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 12%,transparent);color:var(--dsw-alias-state-warn-label)}.dvt-badge.error{background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 10%,transparent);color:var(--dsw-alias-state-error-primary)}.dvt-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.dvt-field{display:grid;min-width:0;gap:6px;align-content:start}.dvt-field>span{font-size:11px;font-weight:600}.dvt-field>small{font-size:10px;color:var(--dsw-alias-label-secondary);line-height:1.4}.dvt-field select,.dvt-field textarea{width:100%;box-sizing:border-box;border:1px solid var(--dsw-alias-border-l1);border-radius:9px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;padding:8px 10px}.dvt-field select{height:36px}.dvt-field textarea{resize:vertical;min-height:76px}.dvt-check{display:grid;gap:6px;cursor:pointer}.dvt-check input{width:auto}.dvt-check>span{font-size:12px;font-weight:600}.dvt-check>small{font-size:10px;color:var(--dsw-alias-label-secondary);line-height:1.4}.dvt-runtime-facts{display:grid;gap:4px;padding:9px 10px;border-radius:9px;background:var(--dsw-alias-bg-layer-2);overflow:auto}.dvt-runtime-facts code{font-size:10px;white-space:nowrap;color:var(--dsw-alias-label-secondary)}.dvt-save-row{display:flex;gap:8px;padding:2px 0}.dvt-update-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.dvt-update-grid>div{display:grid;gap:3px;padding:9px 10px;border-radius:9px;background:var(--dsw-alias-bg-layer-2)}.dvt-update-grid span{font-size:9px;text-transform:uppercase;letter-spacing:.04em;color:var(--dsw-alias-label-caption)}.dvt-update-grid strong{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dvt-tutorial-link{margin:0;font-size:12px;line-height:1.5}.dvt-tutorial-link a{color:var(--dsw-alias-state-business-primary);text-decoration:none;font-weight:600}.dvt-tutorial-link a:hover{text-decoration:underline}.dvt-manual-update{display:flex;align-items:center;gap:8px;padding:9px 10px;border-radius:9px;background:var(--dsw-alias-bg-layer-2)}.dvt-manual-update code{flex:1;min-width:0;overflow:auto;white-space:nowrap;font-size:11px;color:var(--dsw-alias-label-primary)}.dvt-settings{display:flex;flex-direction:column;width:100%;max-width:900px;min-width:0;box-sizing:border-box;gap:14px;padding:8px 2px 32px;color:var(--dsw-alias-label-primary)}.dvt-settings-footer{display:flex;justify-content:space-between;gap:20px;align-items:flex-start;padding:8px 2px}.dvt-settings-footer h2{font-size:25px;letter-spacing:-.025em;margin:3px 0 6px}.dvt-settings-footer p{max-width:620px;margin:0;color:var(--dsw-alias-label-secondary);font-size:13px;line-height:1.55}.dvt-kicker{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--dsw-alias-state-business-primary);font-weight:700}.dvt-release{display:grid;gap:4px;min-width:170px;padding:9px 11px;border-radius:10px;background:var(--dsw-alias-bg-layer-2);font-size:10px;color:var(--dsw-alias-label-secondary)}.dvt-release span{display:flex;justify-content:space-between;gap:12px}.dvt-release strong{color:var(--dsw-alias-label-primary)}.dvt-alert{padding:10px 12px;border-radius:10px;font-size:12px;line-height:1.5;display:grid;gap:3px}.dvt-alert.notice{background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 10%,transparent);color:var(--dsw-alias-state-business-primary)}.dvt-alert.warning{background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 12%,transparent);color:var(--dsw-alias-state-warn-label)}.dvt-alert.error{background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 10%,transparent);color:var(--dsw-alias-state-error-primary)}.dvt-alert.success{background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 10%,transparent);color:var(--dsw-alias-state-success-primary)}.dvt-panel{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;padding:15px;border:1px solid var(--dsw-alias-border-l1);border-radius:14px;background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-shadow-lv1)}.dvt-panel-title{display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px}.dvt-panel-title>div:first-child{flex:1 1 320px;min-width:0}.dvt-panel-title>.dvt-actions{margin-left:auto;justify-content:flex-end}.dvt-panel-title h3{font-size:14px;margin:0}.dvt-panel-title p{font-size:11px;line-height:1.45;color:var(--dsw-alias-label-secondary);margin:4px 0 0;max-width:620px}.dvt-badge{font-size:10px;padding:3px 7px;border-radius:999px;font-weight:650}.dvt-badge.ok{background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 12%,transparent);color:var(--dsw-alias-state-success-primary)}.dvt-badge.warning{background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 12%,transparent);color:var(--dsw-alias-state-warn-label)}.dvt-badge.error{background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 10%,transparent);color:var(--dsw-alias-state-error-primary)}.dvt-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.dvt-field{display:grid;min-width:0;gap:6px;align-content:start}.dvt-field>span{font-size:11px;font-weight:600}.dvt-field>small{font-size:10px;color:var(--dsw-alias-label-secondary);line-height:1.4}.dvt-field select,.dvt-field textarea{width:100%;box-sizing:border-box;border:1px solid var(--dsw-alias-border-l1);border-radius:9px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;padding:8px 10px}.dvt-field select{height:36px}.dvt-field textarea{resize:vertical;min-height:76px}.dvt-check{display:grid;gap:6px;cursor:pointer}.dvt-check input{width:auto}.dvt-check>span{font-size:12px;font-weight:600}.dvt-check>small{font-size:10px;color:var(--dsw-alias-label-secondary);line-height:1.4}.dvt-runtime-facts{display:grid;gap:4px;padding:9px 10px;border-radius:9px;background:var(--dsw-alias-bg-layer-2);overflow:auto}.dvt-runtime-facts code{font-size:10px;white-space:nowrap;color:var(--dsw-alias-label-secondary)}.dvt-update-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.dvt-update-grid>div{display:grid;gap:3px;padding:9px 10px;border-radius:9px;background:var(--dsw-alias-bg-layer-2)}.dvt-update-grid span{font-size:9px;text-transform:uppercase;letter-spacing:.04em;color:var(--dsw-alias-label-caption)}.dvt-update-grid strong{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dvt-settings-footer{margin-top:8px;padding:20px 2px 4px;border-top:1px solid var(--dsw-alias-border-l1);opacity:.82}.dvt-settings-footer h2{font-size:18px;letter-spacing:-.015em;margin:3px 0 5px}.dvt-settings-footer p{font-size:11px;line-height:1.5}.dvt-release{min-width:220px}.dvt-release span{white-space:nowrap}.dvt-essential{border-color:color-mix(in srgb,var(--dsw-alias-state-business-primary) 30%,var(--dsw-alias-border-l1));box-shadow:var(--dsw-shadow-lv1),0 0 0 3px color-mix(in srgb,var(--dsw-alias-state-business-primary) 5%,transparent)}.dvt-advanced{border:1px solid var(--dsw-alias-border-l1);border-radius:14px;background:var(--dsw-alias-bg-layer-1);overflow:hidden}.dvt-advanced>summary{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 15px;cursor:pointer;list-style:none}.dvt-advanced>summary::-webkit-details-marker{display:none}.dvt-advanced>summary>span:first-child{display:grid;gap:3px}.dvt-advanced>summary strong{font-size:13px}.dvt-advanced>summary small{font-size:10px;line-height:1.45;color:var(--dsw-alias-label-secondary);font-weight:400}.dvt-details-chevron{font-size:15px;opacity:.55;transition:transform .16s ease}.dvt-advanced[open] .dvt-details-chevron{transform:rotate(180deg)}.dvt-advanced-body{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;padding:0 12px 12px}.dvt-advanced-body>.dvt-panel{box-shadow:none}
 .dvt-health-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px}.dvt-health-grid>div{padding:9px 10px;border-radius:9px;background:var(--dsw-alias-bg-layer-2);border-left:3px solid var(--dsw-alias-border-l4)}.dvt-health-grid>div[data-status=ok]{border-left-color:var(--dsw-alias-state-success-primary)}.dvt-health-grid>div[data-status=warning],.dvt-health-grid>div[data-status=not_tested]{border-left-color:var(--dsw-alias-state-warn-primary)}.dvt-health-grid>div[data-status=error]{border-left-color:var(--dsw-alias-state-error-primary)}.dvt-health-grid span{font-size:10px;text-transform:capitalize}.dvt-health-grid strong{float:right;font-size:9px;text-transform:uppercase;color:var(--dsw-alias-label-secondary)}.dvt-health-test-tag{display:inline-flex;margin-left:6px;padding:1px 6px;border-radius:999px;background:var(--dsw-alias-bg-layer-1);font-size:9px;font-style:normal;font-weight:600;color:var(--dsw-alias-label-secondary)}.dvt-health-test-tag[data-status=ok]{background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 12%,transparent);color:var(--dsw-alias-state-success-primary)}.dvt-health-test-tag[data-status=warning]{background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 12%,transparent);color:var(--dsw-alias-state-warn-label)}.dvt-health-test-tag[data-status=error]{background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 12%,transparent);color:var(--dsw-alias-state-error-primary)}.dvt-health-grid p{clear:both;margin:5px 0 0;font-size:10px;line-height:1.4;color:var(--dsw-alias-label-secondary)}.dvt-loading{padding:24px;border-radius:12px;background:var(--dsw-alias-bg-layer-2);font-size:12px;color:var(--dsw-alias-label-secondary)}
 .dvt-paste-dock{box-sizing:border-box;width:calc(100% - 32px);max-width:var(--dsh-composer-card-max-width,960px);margin:0 auto;display:flex;flex-wrap:wrap;gap:6px;padding:0 2px 6px}.dvt-paste-chip{max-width:100%;height:32px;box-sizing:border-box;display:flex;align-items:center;gap:7px;padding:0 6px 0 10px;border:1px solid var(--dsw-alias-border-l1);border-radius:9px;background:var(--dsw-specific-tip);font-size:12px}.dvt-paste-chip[data-status=copying]{border-color:var(--dsw-alias-state-business-primary)}.dvt-paste-chip[data-status=error]{border-color:var(--dsw-alias-state-error-primary)}.dvt-paste-name{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dvt-paste-detail{color:var(--dsw-alias-label-caption);max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dvt-paste-chip[data-status=error] .dvt-paste-detail{color:var(--dsw-alias-state-error-primary)}.dvt-paste-chip button{width:20px;height:20px;display:grid;place-items:center;border:0;border-radius:50%;padding:0;background:transparent;color:var(--dsw-alias-label-caption);font:inherit;font-size:16px;cursor:pointer}.dvt-paste-chip button:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.dvt-paste-chip button:disabled{opacity:.4;cursor:default}
 .dvt-provider-card{border:1px solid var(--dsw-alias-border-l1);border-radius:10px;padding:9px 10px;display:grid;gap:8px;background:var(--dsw-alias-bg-layer-2)}.dvt-provider-head{display:flex;align-items:center;gap:10px}.dvt-provider-priority{margin-left:auto;font-size:11px;color:var(--dsw-alias-label-secondary);white-space:nowrap}.dvt-provider-actions{display:flex;gap:4px}.dvt-provider-actions button{width:26px;height:26px;display:grid;place-items:center;border:1px solid var(--dsw-alias-border-l1);border-radius:7px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);cursor:pointer;font-size:14px;line-height:1}.dvt-provider-actions button:hover{background:var(--dsw-alias-interactive-bg-hover)}.dvt-provider-actions button:disabled{opacity:.35;cursor:default}.dvt-provider-select{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.dvt-provider-select select{flex:1;min-width:180px;height:36px;box-sizing:border-box;border:1px solid var(--dsw-alias-border-l1);border-radius:9px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;padding:0 10px}.dvt-provider-tests{display:flex;align-items:center;gap:7px;flex-wrap:wrap}.dvt-provider-test-result{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px}.dvt-provider-test-result>div{padding:9px 10px;border-radius:9px;background:var(--dsw-alias-bg-layer-2);border-left:3px solid var(--dsw-alias-border-l4)}.dvt-provider-test-result>div[data-status=ok]{border-left-color:var(--dsw-alias-state-success-primary)}.dvt-provider-test-result>div[data-status=warning],.dvt-provider-test-result>div[data-status=not_tested]{border-left-color:var(--dsw-alias-state-warn-primary)}.dvt-provider-test-result>div[data-status=error]{border-left-color:var(--dsw-alias-state-error-primary)}.dvt-provider-test-result span{font-size:10px;text-transform:capitalize}.dvt-provider-test-result strong{float:right;font-size:9px;text-transform:uppercase;color:var(--dsw-alias-label-secondary)}.dvt-provider-test-result p{clear:both;margin:5px 0 0;font-size:10px;line-height:1.4;color:var(--dsw-alias-label-secondary)}.dvt-sorter{display:grid;gap:6px}.dvt-sorter-row{display:flex;align-items:center;gap:10px;padding:6px 8px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-2)}.dvt-sorter-index{flex:none;width:24px;height:24px;display:grid;place-items:center;border-radius:6px;background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 12%,transparent);color:var(--dsw-alias-state-business-primary);font-size:11px;font-weight:700}.dvt-sorter-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+.dvt-save-dock{position:sticky;top:8px;align-self:flex-end;z-index:50;display:flex;align-items:center;gap:10px;max-width:calc(100% - 16px);padding:11px 14px;border:1px solid var(--dsw-alias-border-l1);border-radius:12px;background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-shadow-lv1)}.dvt-save-dock[data-dirty]{border-color:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 45%,var(--dsw-alias-border-l1))}.dvt-save-dock-text{font-size:12px;color:var(--dsw-alias-label-secondary)}.dvt-save-dock[data-dirty] .dvt-save-dock-text{color:var(--dsw-alias-state-warn-label);font-weight:600}.dvt-save-dock-reload{flex:none;display:grid;place-items:center;width:26px;height:26px;border:1px solid transparent;border-radius:7px;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer;padding:0}.dvt-save-dock-reload:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.dvt-save-dock-reload:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:1px}.dvt-save-dock-reload:disabled{opacity:.4;cursor:default}
 @media(max-width:720px){.dvt-settings-footer{display:grid}.dvt-release{width:auto}.dvt-form-grid,.dvt-update-grid{grid-template-columns:1fr}.dvt-metrics{grid-template-columns:1fr}.dvt-artifact-meta{align-items:flex-start;flex-direction:column}.dvt-panel-title{flex-direction:column}}
 `
 

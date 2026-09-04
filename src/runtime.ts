@@ -18,6 +18,7 @@ import { isBuiltInFreeVisionProvider, type ResolvedProvider, type ResolvedVision
 import { BUILT_IN_FREE_VISION_KEY } from './defaults.ts'
 import { evidenceRuntimeFingerprint } from './evidence-cache.ts'
 import { VisionToolkitError, type VisionToolkitErrorCode } from './errors.ts'
+import { ObjectStorageClient, splitObjectStorageCredential, type ObjectStorageSettings } from './object-storage.ts'
 import {
   assertDistinctOutput,
   commitStagedDirectory,
@@ -540,6 +541,17 @@ const FORMAT_BY_EXTENSION = new Map([
 ])
 const HEX_COLOR_PATTERN = /^#[0-9A-F]{6}$/
 
+/** MIME type for one analyzed image format, used when uploading to object storage. */
+function imageMimeType(format: string): string {
+  switch (format) {
+    case 'png': return 'image/png'
+    case 'jpeg': return 'image/jpeg'
+    case 'gif': return 'image/gif'
+    case 'webp': return 'image/webp'
+    default: return 'application/octet-stream'
+  }
+}
+
 /**
  * Error codes a provider retries against the SAME provider within its
  * `attempts` budget. Only transient failures are worth re-requesting: a
@@ -986,6 +998,7 @@ export class VisionToolkitRuntime {
         anthropicThinking: provider.anthropicThinking,
         userAgent: provider.userAgent,
         stream: provider.stream,
+        uploadViaUrl: provider.uploadViaUrl,
       })
         ? { value: BUILT_IN_FREE_VISION_KEY, source: 'built-in' }
         : await this.ctx.credentials.resolve(provider.credential)
@@ -1253,6 +1266,84 @@ export class VisionToolkitRuntime {
     operation.metrics.imageCount += 1
     operation.metrics.imageBytes += image.bytes
     operation.metrics.imagePixels += image.width * image.height
+  }
+
+  /** Resolve the configured object storage into a usable client, or undefined. */
+  private async resolveObjectStorageClient(): Promise<ObjectStorageClient | undefined> {
+    const objectStorage = this.config.objectStorage
+    if (objectStorage.credential === undefined || objectStorage.endpoint.length === 0 || objectStorage.bucket.length === 0) {
+      return undefined
+    }
+    let resolved: ResolvedCredential | undefined
+    try {
+      resolved = await this.ctx.credentials.resolve(objectStorage.credential)
+    } catch {
+      resolved = undefined
+    }
+    if (resolved === undefined) return undefined
+    let accessKeyId: string
+    let secretAccessKey: string
+    try {
+      const split = splitObjectStorageCredential(resolved.value)
+      accessKeyId = split.accessKeyId
+      secretAccessKey = split.secretAccessKey
+    } catch (error) {
+      throw new VisionToolkitError('config', 'object storage credential is malformed', { cause: error })
+    }
+    const settings: ObjectStorageSettings = {
+      endpoint: objectStorage.endpoint,
+      bucket: objectStorage.bucket,
+      accessKeyId,
+      secretAccessKey,
+      ...(objectStorage.publicBase === undefined ? {} : { publicBase: objectStorage.publicBase }),
+    }
+    return new ObjectStorageClient(settings)
+  }
+
+  /**
+   * Upload the prepared images to object storage and return their URLs plus a
+   * cleanup callback, when the primary provider opts into URL transfer and
+   * object storage is configured. Returns undefined otherwise (base64 path).
+   */
+  private async maybeTransferImages(
+    pool: readonly ResolvedProviderEnv[],
+    images: readonly ImageInfo[],
+    operation: OperationContext,
+  ): Promise<{ urls: string[]; cleanup: () => Promise<void> } | undefined> {
+    const primary = pool[0]
+    if (primary === undefined || primary.provider.uploadViaUrl !== true) return undefined
+    const client = await this.resolveObjectStorageClient()
+    if (client === undefined) {
+      throw new VisionToolkitError('config', 'uploadViaUrl is enabled but object storage is not configured')
+    }
+    const keys: string[] = []
+    const urls: string[] = []
+    try {
+      for (const image of images) {
+        if (operation.signal.aborted) throw new VisionToolkitError('cancelled', 'vision image upload cancelled')
+        const uploaded = await client.uploadImage(image.path, imageMimeType(image.format))
+        keys.push(uploaded.key)
+        urls.push(uploaded.url)
+      }
+    } catch (error) {
+      await Promise.allSettled(keys.map(key => client.deleteObject(key)))
+      throw error
+    }
+    return {
+      urls,
+      cleanup: async () => {
+        await Promise.allSettled(keys.map(key => client.deleteObject(key)))
+      },
+    }
+  }
+
+  /** Settings "test storage" probe: upload → head → delete a tiny marker object. */
+  async testObjectStorage(): Promise<{ detail: string }> {
+    const client = await this.resolveObjectStorageClient()
+    if (client === undefined) {
+      throw new VisionToolkitError('config', 'object storage is not configured (endpoint, bucket, and credential are required)')
+    }
+    return client.test()
   }
 
   /** Stable gate key for one provider's in-flight request cap. */
@@ -1606,6 +1697,7 @@ export class VisionToolkitRuntime {
         anthropicThinking: env.VISION_ANTHROPIC_THINKING,
         sslVerify: env.VISION_SSL_VERIFY ?? null,
         stream: env.VISION_STREAM === '1',
+        uploadViaUrl: provider.uploadViaUrl,
         userAgent: env.VISION_USER_AGENT,
         credentialSha256: createHash('sha256').update(env.VISION_API_KEY).digest('hex'),
         maxImageBytes: provider.maxImageBytes,
@@ -1736,24 +1828,31 @@ export class VisionToolkitRuntime {
           return cached.result
         }
       }
-      const result = await this.runVisionHedge('glance', [
-        ...images.map(image => image.path),
-        ...(request.region !== undefined ? ['--region', request.region] : []),
-        ...(request.ocr === true ? ['--ocr'] : []),
-        ...(request.query !== undefined ? ['-q', request.query] : []),
-      ], images, operation, pool)
-      const answer = result.stdout.trim()
-      if (answer.length === 0) throw new VisionToolkitError('output', 'glance: vision API returned an empty description')
-      const value: GlanceResult = {
-        images,
-        mode: request.ocr === true ? 'ocr' : request.query !== undefined ? 'qa' : 'describe',
-        answer,
-        truncated: false,
+      const transfer = request.region === undefined
+        ? await this.maybeTransferImages(pool, images, operation)
+        : undefined
+      try {
+        const result = await this.runVisionHedge('glance', [
+          ...(transfer !== undefined ? transfer.urls : images.map(image => image.path)),
+          ...(transfer === undefined && request.region !== undefined ? ['--region', request.region] : []),
+          ...(request.ocr === true ? ['--ocr'] : []),
+          ...(request.query !== undefined ? ['-q', request.query] : []),
+        ], images, operation, pool)
+        const answer = result.stdout.trim()
+        if (answer.length === 0) throw new VisionToolkitError('output', 'glance: vision API returned an empty description')
+        const value: GlanceResult = {
+          images,
+          mode: request.ocr === true ? 'ocr' : request.query !== undefined ? 'qa' : 'describe',
+          answer,
+          truncated: false,
+        }
+        if (options.sessionScope !== undefined && cacheKey !== undefined && !operation.signal.aborted) {
+          this.glanceCache.set(options.sessionScope, { key: cacheKey, result: value })
+        }
+        return value
+      } finally {
+        if (transfer !== undefined) await transfer.cleanup()
       }
-      if (options.sessionScope !== undefined && cacheKey !== undefined && !operation.signal.aborted) {
-        this.glanceCache.set(options.sessionScope, { key: cacheKey, result: value })
-      }
-      return value
     })
   }
 
@@ -1789,14 +1888,23 @@ export class VisionToolkitRuntime {
     }
     const image = await this.prepareVisionImage(request.image, pool.map(entry => entry.provider), policy, operation)
     this.accountImage(image, operation)
-    const result = await this.runVisionHedge(tool, [
-      image.path,
-      request.target,
-      ...(request.region !== undefined ? ['--region', request.region] : []),
-    ], [image], operation, pool)
-    const elements = parseLocationOutput(result.stdout)
-    this.validateLocations(elements, image.width, image.height)
-    return { image, elements }
+    const transfer = request.region === undefined
+      ? await this.maybeTransferImages(pool, [image], operation)
+      : undefined
+    try {
+      const result = await this.runVisionHedge(tool, transfer !== undefined
+        ? [transfer.urls[0]!, request.target, '--size', `${image.width}x${image.height}`]
+        : [
+          image.path,
+          request.target,
+          ...(request.region !== undefined ? ['--region', request.region] : []),
+        ], [image], operation, pool)
+      const elements = parseLocationOutput(result.stdout)
+      this.validateLocations(elements, image.width, image.height)
+      return { image, elements }
+    } finally {
+      if (transfer !== undefined) await transfer.cleanup()
+    }
   }
 
   /** ground: locate one named target and return pixel boxes. */

@@ -8,7 +8,7 @@ try:
 except ImportError:
     Image = None
 
-from ground import GroundError, _position, locate
+from ground import GroundError, _parse_size, _position, locate
 from vision_client import VisionError
 
 DEFAULT_CATEGORY = ("UI element (buttons, links, inputs, icons, labels, "
@@ -38,18 +38,24 @@ def main() -> None:
         prog="detect",
         description="Inventory the elements in an image (or a region) with pixel bounding boxes",
     )
-    parser.add_argument("image", type=Path, help="path to the image")
+    parser.add_argument("image", help="path or http(s) URL to the image")
     parser.add_argument("category", nargs="?",
                         help='restrict to a category, e.g. "buttons" or "icons" (default: all UI elements)')
     parser.add_argument("--region", metavar="X1,Y1,X2,Y2",
                         help="inventory only this pixel box; output stays in original-image coordinates")
+    parser.add_argument("--size", metavar="WxH",
+                        help="analyzed image dimensions when the image is an http(s) URL")
     args = parser.parse_args()
     try:
-        matches = locate(args.image.expanduser(), build_target(args.category), region=args.region)
-        if Image is None:
-            raise GroundError("detect requires Pillow; install the optional dependency pillow first")
-        with Image.open(args.image.expanduser()) as image:
-            width, height = image.size
+        size = _parse_size(args.size) if args.size else None
+        matches = locate(args.image, build_target(args.category), region=args.region, size=size)
+        if size is not None:
+            width, height = size
+        else:
+            if Image is None:
+                raise GroundError("detect requires Pillow; install the optional dependency pillow first")
+            with Image.open(Path(args.image).expanduser()) as image:
+                width, height = image.size
     except (GroundError, VisionError) as exc:
         parser.exit(1, f"detect: {exc}\n")
     for line in format_inventory(matches, width, height):

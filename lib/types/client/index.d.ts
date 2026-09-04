@@ -44,6 +44,8 @@ declare const en: {
     readonly userAgent: "User-Agent";
     readonly stream: "Streaming";
     readonly streamHint: "Request a streamed (SSE) completion instead of one JSON response. Use it for endpoints with weak non-streaming support or that time out on long outputs.";
+    readonly uploadViaUrl: "Transfer images via URL";
+    readonly uploadViaUrlHint: "Upload each image to the configured object storage and send the model a URL instead of base64. Requires object storage (below); region crops fall back to base64.";
     readonly language: "Output language";
     readonly limits: "Timeout and concurrency";
     readonly timeout: "Request timeout (ms)";
@@ -69,10 +71,24 @@ declare const en: {
     readonly storageDirHint: "Leave blank to keep .dsh-vision-toolkit in each workspace. On POSIX systems, set an absolute shared root such as /tmp/dsh-vision-toolkit to store artifacts, pasted images, and caches in an automatically generated per-user, workspace-specific child directory. Windows shared roots remain disabled until their ACLs can be verified safely.";
     readonly allowedDirs: "Additional allowed directories";
     readonly allowedDirsHint: "One path per line. The session workspace is always allowed.";
+    readonly objectStorage: "Object storage";
+    readonly objectStorageHint: "S3-compatible storage used when a provider enables URL image transfer. The access key is stored as a DSH credential and never shown again after saving.";
+    readonly storageEndpoint: "Endpoint";
+    readonly storageBucket: "Bucket";
+    readonly storageAccessKeyId: "Access Key ID";
+    readonly storageSecretAccessKey: "Secret Access Key";
+    readonly storagePublicBase: "Public base URL (optional)";
+    readonly storagePublicBaseHint: "Custom domain or r2.dev URL for permanent public links. Leave blank to use temporary presigned URLs.";
+    readonly testStorage: "Test object storage";
+    readonly testingStorage: "Testing…";
+    readonly storageKeyPair: "Access Key ID and Secret Access Key must both be filled together.";
     readonly save: "Save and apply";
     readonly saving: "Validating runtime…";
     readonly reload: "Reload";
     readonly saved: "Settings validated and applied.";
+    readonly unsavedChanges: "Changed but not saved";
+    readonly discardChanges: "Discard changes";
+    readonly noUnsavedChanges: "Settings unchanged";
     readonly readOnly: "Service settings are read-only. A writable API key can still be saved.";
     readonly configured: "Configured";
     readonly missing: "Missing";
@@ -264,6 +280,7 @@ interface ProviderValue {
     anthropicThinking?: 'omit' | 'disabled' | 'adaptive';
     userAgent?: string;
     stream?: boolean;
+    uploadViaUrl?: boolean;
     t1Seconds?: number;
     t2Seconds?: number;
     maxImageBytes?: number;
@@ -280,6 +297,7 @@ interface SettingsValue {
         anthropicThinking?: 'omit' | 'disabled' | 'adaptive';
         userAgent?: string;
         stream?: boolean;
+        uploadViaUrl?: boolean;
     };
     providers?: ProviderValue[];
     language?: 'zh' | 'en';
@@ -289,6 +307,12 @@ interface SettingsValue {
     maxImageBytes?: number;
     maxImagePixels?: number;
     concurrency?: number;
+    objectStorage?: {
+        endpoint?: string;
+        bucket?: string;
+        credential?: string;
+        publicBase?: string;
+    };
     runtime?: {
         mode?: 'managed' | 'external';
         agentVisionToolkitPath?: string;
@@ -353,6 +377,11 @@ interface SettingsSnapshot {
         source?: string;
         writable: boolean;
     }>;
+    objectStorageCredential: {
+        ref: string;
+        configured: boolean;
+        writable: boolean;
+    };
     runtime: {
         ready: boolean;
         generation: number;
@@ -384,7 +413,10 @@ interface SettingsState {
     providerHealth?: Record<number, HealthResult> | undefined;
     update?: PluginUpdateCheck | undefined;
     restart?: PluginUpdateResult | undefined;
-    action?: 'save' | 'health' | 'connection' | 'model' | 'check-update' | 'apply-update' | undefined;
+    storageTest?: {
+        detail: string;
+    } | undefined;
+    action?: 'save' | 'health' | 'connection' | 'model' | 'check-update' | 'apply-update' | 'test-storage' | undefined;
     message?: string | undefined;
     error?: string | undefined;
 }
@@ -403,6 +435,7 @@ export declare class VisionSettingsController {
         value: string;
     }>, writeSettings: boolean): Promise<boolean>;
     runHealth(mode: 'health' | 'connection' | 'model', providerIndex?: number): Promise<void>;
+    testStorage(): Promise<void>;
     checkUpdate(): Promise<void>;
     applyUpdate(expectedVersion: string): Promise<void>;
     reportRestartTimeout(message: string): void;

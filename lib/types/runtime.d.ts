@@ -425,6 +425,18 @@ export declare class VisionToolkitRuntime {
     /** Validate one image against the configured global limits (used by local tools). */
     private validateImage;
     private accountImage;
+    /** Resolve the configured object storage into a usable client, or undefined. */
+    private resolveObjectStorageClient;
+    /**
+     * Upload the prepared images to object storage and return their URLs plus a
+     * cleanup callback, when the primary provider opts into URL transfer and
+     * object storage is configured. Returns undefined otherwise (base64 path).
+     */
+    private maybeTransferImages;
+    /** Settings "test storage" probe: upload → head → delete a tiny marker object. */
+    testObjectStorage(): Promise<{
+        detail: string;
+    }>;
     /** Stable gate key for one provider's in-flight request cap. */
     private providerGate;
     /**

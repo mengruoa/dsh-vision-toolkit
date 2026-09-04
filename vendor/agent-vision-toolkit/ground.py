@@ -184,23 +184,32 @@ def _parse_region(region: str, width: int, height: int) -> tuple[int, int, int, 
     return box
 
 
-def locate(image_path: Path, target: str, region: str | None = None) -> list[Match]:
+def locate(image_path: str, target: str, region: str | None = None,
+           size: tuple[int, int] | None = None) -> list[Match]:
     if Image is None:
         raise GroundError("ground requires Pillow; install the optional dependency pillow first")
     load_default_env()
     box = None
-    try:
-        with Image.open(image_path) as image:
-            width, height = image.size
-            if region:
-                box = _parse_region(region, width, height)
-                buffer = io.BytesIO()
-                image.crop(box).save(buffer, format="PNG")
-                url = "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode()
-    except (OSError, ValueError) as exc:
-        raise GroundError(f"Cannot read image: {image_path}") from exc
+    if size is not None:
+        # URL transfer: the image was uploaded to object storage and this caller
+        # supplies the analyzed dimensions, so no local file access is needed.
+        width, height = size
+        url = image_path if image_path.startswith(("http://", "https://")) else image_path_to_data_url(image_path)
+    else:
+        local = Path(image_path).expanduser()
+        try:
+            with Image.open(local) as image:
+                width, height = image.size
+                if region:
+                    box = _parse_region(region, width, height)
+                    buffer = io.BytesIO()
+                    image.crop(box).save(buffer, format="PNG")
+                    url = "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode()
+        except (OSError, ValueError) as exc:
+            raise GroundError(f"Cannot read image: {image_path}") from exc
+        if box is None:
+            url = image_path_to_data_url(local)
     if box is None:
-        url = image_path_to_data_url(image_path)
         width_used, height_used = width, height
     else:
         width_used, height_used = box[2] - box[0], box[3] - box[1]
@@ -214,6 +223,16 @@ def locate(image_path: Path, target: str, region: str | None = None) -> list[Mat
     # Matches were parsed in crop coordinates; report them in the original image.
     return [Match(m.label, (m.bbox[0] + box[0], m.bbox[1] + box[1],
                             m.bbox[2] + box[0], m.bbox[3] + box[1])) for m in matches]
+
+
+def _parse_size(value: str) -> tuple[int, int]:
+    try:
+        width, height = (int(part) for part in value.lower().split("x"))
+    except (ValueError, AttributeError):
+        raise GroundError("--size expects WIDTHxHEIGHT (e.g. 1024x768)") from None
+    if width <= 0 or height <= 0:
+        raise GroundError("--size expects positive WIDTHxHEIGHT")
+    return width, height
 
 
 def _position(box: tuple[int, int, int, int], width: int, height: int) -> str:
@@ -246,17 +265,23 @@ def main() -> None:
         prog="ground",
         description="Locate targets in an image with natural language and output pixel coordinates",
     )
-    parser.add_argument("image", type=Path, help="path to the image")
+    parser.add_argument("image", help="path or http(s) URL to the image")
     parser.add_argument("target", help="target object or region to locate")
     parser.add_argument("--region", metavar="X1,Y1,X2,Y2",
                         help="search only this pixel box; output stays in original-image coordinates")
+    parser.add_argument("--size", metavar="WxH",
+                        help="analyzed image dimensions when the image is an http(s) URL")
     args = parser.parse_args()
     try:
-        matches = locate(args.image.expanduser(), args.target, region=args.region)
-        if Image is None:
-            raise GroundError("ground requires Pillow; install the optional dependency pillow first")
-        with Image.open(args.image.expanduser()) as image:
-            width, height = image.size
+        size = _parse_size(args.size) if args.size else None
+        matches = locate(args.image, args.target, region=args.region, size=size)
+        if size is not None:
+            width, height = size
+        else:
+            if Image is None:
+                raise GroundError("ground requires Pillow; install the optional dependency pillow first")
+            with Image.open(Path(args.image).expanduser()) as image:
+                width, height = image.size
     except (GroundError, VisionError) as exc:
         parser.exit(1, f"ground: {exc}\n")
     for line in format_matches(matches, width, height):

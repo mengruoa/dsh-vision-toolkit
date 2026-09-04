@@ -79,6 +79,8 @@ export interface VisionProviderConfig {
   userAgent?: string
   /** Whether to request a streamed (SSE) completion instead of one JSON response (default false). */
   stream?: boolean
+  /** Whether to upload images to object storage and send the model a URL instead of base64 (default false). */
+  uploadViaUrl?: boolean
   /** t1: per-request hedge threshold in seconds. A single request exceeding t1 keeps running while the next provider starts in parallel. */
   t1Seconds?: number
   /** t2: per-provider cumulative cutoff in seconds. Total accumulated request time reaching t2 terminates the provider. */
@@ -110,6 +112,8 @@ export interface VisionToolkitConfig {
     userAgent?: string
     /** Whether to request a streamed (SSE) completion instead of one JSON response (default false). */
     stream?: boolean
+    /** Whether to upload images to object storage and send the model a URL instead of base64 (default false). */
+    uploadViaUrl?: boolean
   }
   /** Ordered online vision providers; array order is the failover priority. */
   providers?: VisionProviderConfig[]
@@ -127,6 +131,21 @@ export interface VisionToolkitConfig {
   maxImagePixels?: number
   /** Default per-model in-flight request cap inherited by providers that do not set their own. */
   concurrency?: number
+  /**
+   * Optional S3-compatible object storage used by the URL image-transfer path.
+   * `endpoint`, `bucket`, and `credential` are required to enable URL transfer;
+   * `publicBase` is optional and falls back to presigned URLs when unset.
+   */
+  objectStorage?: {
+    /** S3-compatible API endpoint (e.g. R2, MinIO, Tencent COS). */
+    endpoint?: string
+    /** Bucket name. */
+    bucket?: string
+    /** DSH Credential reference holding "accessKeyId:secretAccessKey". */
+    credential?: string
+    /** Public base URL (custom domain / r2.dev); when unset, presigned URLs are used. */
+    publicBase?: string
+  }
   runtime?: {
     /** `managed` uses the packaged snapshot and isolated venv; `external` uses a clean pinned checkout. */
     mode?: 'managed' | 'external'
@@ -199,6 +218,7 @@ export const Config: Schema<VisionToolkitConfig> = z.object({
     anthropicThinking: z.union(['omit', 'disabled', 'adaptive'] as const).default('omit'),
     userAgent: z.string(),
     stream: z.boolean().default(false),
+    uploadViaUrl: z.boolean().default(false),
     t1Seconds: z.number(),
     t2Seconds: z.number(),
     maxImageBytes: z.number(),
@@ -213,6 +233,12 @@ export const Config: Schema<VisionToolkitConfig> = z.object({
   maxImageBytes: z.number().default(4194304),
   maxImagePixels: z.number().default(20000000),
   concurrency: z.number().default(4),
+  objectStorage: z.object({
+    endpoint: z.string().default(''),
+    bucket: z.string().default(''),
+    credential: z.string().default(''),
+    publicBase: z.string().default(''),
+  }),
   runtime: z.object({
     mode: z.union(['managed', 'external'] as const).default('managed'),
     agentVisionToolkitPath: z.string(),
@@ -242,6 +268,7 @@ export interface ResolvedProvider {
   anthropicThinking: 'omit' | 'disabled' | 'adaptive'
   userAgent: string
   stream: boolean
+  uploadViaUrl: boolean
   t1Seconds: number
   t2Seconds: number
   maxImageBytes: number
@@ -260,6 +287,7 @@ export interface ResolvedVisionToolkitConfig {
     anthropicThinking: 'omit' | 'disabled' | 'adaptive'
     userAgent: string
     stream: boolean
+    uploadViaUrl: boolean
   }
   /** Ordered failover pool; array order is the priority, highest first. */
   providers: ResolvedProvider[]
@@ -270,6 +298,12 @@ export interface ResolvedVisionToolkitConfig {
   maxImageBytes: number
   maxImagePixels: number
   concurrency: number
+  objectStorage: {
+    endpoint: string
+    bucket: string
+    credential?: CredentialRef
+    publicBase?: string
+  }
   runtime: {
     mode: 'managed' | 'external'
     agentVisionToolkitPath?: string
@@ -375,6 +409,7 @@ function resolveProvider(
     throw new VisionToolkitError('config', `${label}.userAgent must not be empty`)
   }
   const stream = input.stream === true
+  const uploadViaUrl = input.uploadViaUrl === true
   const t1Seconds = input.t1Seconds ?? 90
   if (!Number.isInteger(t1Seconds) || t1Seconds < 1 || t1Seconds > MAX_TIMEOUT_SECONDS) {
     throw new VisionToolkitError('config', `${label}.t1Seconds must be an integer between 1 and ${MAX_TIMEOUT_SECONDS}`)
@@ -412,6 +447,7 @@ function resolveProvider(
     anthropicThinking,
     userAgent,
     stream,
+    uploadViaUrl,
     t1Seconds,
     t2Seconds,
     maxImageBytes,
@@ -482,6 +518,19 @@ export function resolveConfig(config: VisionToolkitConfig = {}): ResolvedVisionT
     .map(dir => dir.trim())
     .filter(dir => dir.length > 0 && dir !== storageDir))]
   const allowedDirs = (config.allowedDirs ?? []).map(dir => dir.trim()).filter(dir => dir.length > 0)
+  const objectStorageInput = config.objectStorage ?? {}
+  const objectStorageEndpoint = objectStorageInput.endpoint?.trim() ?? ''
+  const objectStorageBucket = objectStorageInput.bucket?.trim() ?? ''
+  const objectStoragePublicBase = objectStorageInput.publicBase?.trim()
+  let objectStorageCredential: CredentialRef | undefined
+  const objectStorageCredentialSource = objectStorageInput.credential?.trim()
+  if (objectStorageCredentialSource !== undefined && objectStorageCredentialSource.length > 0) {
+    try {
+      objectStorageCredential = credentialRef(objectStorageCredentialSource)
+    } catch (error) {
+      throw new VisionToolkitError('config', `objectStorage.credential "${objectStorageCredentialSource}" is not a valid credential reference`, { cause: error })
+    }
+  }
   const imageInputVariants = config.imageInputVariants ?? {}
   const variantProviders = (imageInputVariants.providers ?? [])
     .map(provider => provider.trim())
@@ -505,6 +554,7 @@ export function resolveConfig(config: VisionToolkitConfig = {}): ResolvedVisionT
       anthropicThinking: primary.anthropicThinking,
       userAgent: primary.userAgent,
       stream: primary.stream,
+      uploadViaUrl: primary.uploadViaUrl,
     },
     providers,
     language,
@@ -514,6 +564,12 @@ export function resolveConfig(config: VisionToolkitConfig = {}): ResolvedVisionT
     maxImageBytes,
     maxImagePixels,
     concurrency,
+    objectStorage: {
+      endpoint: objectStorageEndpoint,
+      bucket: objectStorageBucket,
+      ...(objectStorageCredential === undefined ? {} : { credential: objectStorageCredential }),
+      ...(objectStoragePublicBase === undefined || objectStoragePublicBase.length === 0 ? {} : { publicBase: objectStoragePublicBase }),
+    },
     runtime: {
       mode,
       ...(toolkitPath !== undefined ? { agentVisionToolkitPath: toolkitPath } : {}),

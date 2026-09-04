@@ -22,6 +22,8 @@ describe('resolveConfig', () => {
     expect(config.provider.anthropicThinking).toBe('omit')
     expect(config.provider.userAgent).toBe(DEFAULT_VISION_USER_AGENT)
     expect(config.provider.stream).toBe(false)
+    expect(config.provider.uploadViaUrl).toBe(false)
+    expect(config.objectStorage).toEqual({ endpoint: '', bucket: '' })
     expect(config.language).toBe('zh')
     expect(config.hardTimeoutSeconds).toBe(180)
     expect(config.sessionMaxConcurrency).toBe(6)
@@ -36,6 +38,25 @@ describe('resolveConfig', () => {
     expect(config.storageHistory).toEqual([])
     expect(config.allowedDirs).toEqual([])
     expect(config.imageInputVariants).toEqual({ enabled: true, providers: [], autoSwitch: true, hidden: true })
+  })
+
+  it('resolves object storage and URL-transfer flags with defaults', () => {
+    const config = resolveConfig({
+      provider: { uploadViaUrl: true },
+      objectStorage: {
+        endpoint: ' https://account.r2.cloudflarestorage.com ',
+        bucket: ' photo-tmp ',
+        credential: 'VISION_OBJECT_STORAGE',
+        publicBase: ' https://cdn.example.com ',
+      },
+    })
+    expect(config.provider.uploadViaUrl).toBe(true)
+    expect(config.objectStorage.endpoint).toBe('https://account.r2.cloudflarestorage.com')
+    expect(config.objectStorage.bucket).toBe('photo-tmp')
+    expect(String(config.objectStorage.credential)).toBe('VISION_OBJECT_STORAGE')
+    expect(config.objectStorage.publicBase).toBe('https://cdn.example.com')
+    expect(resolveConfig({ provider: {} }).objectStorage).toEqual({ endpoint: '', bucket: '' })
+    expect(resolveConfig({}).provider.uploadViaUrl).toBe(false)
   })
 
   it('normalizes image-input variant settings', () => {

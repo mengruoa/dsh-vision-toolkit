@@ -40,6 +40,13 @@ def region_data_url(path, region):
     return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode()
 
 
+def image_url(path):
+    """Pass http(s) URLs through unchanged; encode local files as data URLs."""
+    if path.startswith(("http://", "https://")):
+        return path
+    return image_path_to_data_url(path)
+
+
 def build_prompt(args, count):
     if args.ocr is not None:
         extra = f" Additional requirements: {args.ocr}" if args.ocr else ""
@@ -77,7 +84,7 @@ def main():
         if args.region and len(args.images) > 1:
             raise VisionError("--region works with exactly one image")
         urls = ([region_data_url(args.images[0], args.region)] if args.region
-                else [image_path_to_data_url(path) for path in args.images])
+                else [image_url(path) for path in args.images])
         answer = describe_image(
             urls,
             build_prompt(args, len(urls)),

@@ -35,6 +35,8 @@ export interface VisionProviderConfig {
     userAgent?: string;
     /** Whether to request a streamed (SSE) completion instead of one JSON response (default false). */
     stream?: boolean;
+    /** Whether to upload images to object storage and send the model a URL instead of base64 (default false). */
+    uploadViaUrl?: boolean;
     /** t1: per-request hedge threshold in seconds. A single request exceeding t1 keeps running while the next provider starts in parallel. */
     t1Seconds?: number;
     /** t2: per-provider cumulative cutoff in seconds. Total accumulated request time reaching t2 terminates the provider. */
@@ -65,6 +67,8 @@ export interface VisionToolkitConfig {
         userAgent?: string;
         /** Whether to request a streamed (SSE) completion instead of one JSON response (default false). */
         stream?: boolean;
+        /** Whether to upload images to object storage and send the model a URL instead of base64 (default false). */
+        uploadViaUrl?: boolean;
     };
     /** Ordered online vision providers; array order is the failover priority. */
     providers?: VisionProviderConfig[];
@@ -82,6 +86,21 @@ export interface VisionToolkitConfig {
     maxImagePixels?: number;
     /** Default per-model in-flight request cap inherited by providers that do not set their own. */
     concurrency?: number;
+    /**
+     * Optional S3-compatible object storage used by the URL image-transfer path.
+     * `endpoint`, `bucket`, and `credential` are required to enable URL transfer;
+     * `publicBase` is optional and falls back to presigned URLs when unset.
+     */
+    objectStorage?: {
+        /** S3-compatible API endpoint (e.g. R2, MinIO, Tencent COS). */
+        endpoint?: string;
+        /** Bucket name. */
+        bucket?: string;
+        /** DSH Credential reference holding "accessKeyId:secretAccessKey". */
+        credential?: string;
+        /** Public base URL (custom domain / r2.dev); when unset, presigned URLs are used. */
+        publicBase?: string;
+    };
     runtime?: {
         /** `managed` uses the packaged snapshot and isolated venv; `external` uses a clean pinned checkout. */
         mode?: 'managed' | 'external';
@@ -146,6 +165,7 @@ export interface ResolvedProvider {
     anthropicThinking: 'omit' | 'disabled' | 'adaptive';
     userAgent: string;
     stream: boolean;
+    uploadViaUrl: boolean;
     t1Seconds: number;
     t2Seconds: number;
     maxImageBytes: number;
@@ -163,6 +183,7 @@ export interface ResolvedVisionToolkitConfig {
         anthropicThinking: 'omit' | 'disabled' | 'adaptive';
         userAgent: string;
         stream: boolean;
+        uploadViaUrl: boolean;
     };
     /** Ordered failover pool; array order is the priority, highest first. */
     providers: ResolvedProvider[];
@@ -173,6 +194,12 @@ export interface ResolvedVisionToolkitConfig {
     maxImageBytes: number;
     maxImagePixels: number;
     concurrency: number;
+    objectStorage: {
+        endpoint: string;
+        bucket: string;
+        credential?: CredentialRef;
+        publicBase?: string;
+    };
     runtime: {
         mode: 'managed' | 'external';
         agentVisionToolkitPath?: string;

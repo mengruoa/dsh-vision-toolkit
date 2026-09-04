@@ -75,6 +75,12 @@ export interface VisionToolkitSettingsSnapshot {
     source?: string
     writable: boolean
   }>
+  /** Object-storage credential state; `ref` is empty when object storage is unset. */
+  objectStorageCredential: {
+    ref: string
+    configured: boolean
+    writable: boolean
+  }
   runtime: RuntimeManagerStatus
   release: {
     pluginVersion: string
@@ -121,7 +127,11 @@ interface ApplyUpdateRequest {
   expectedVersion: string
 }
 
-type SettingsRequest = SaveRequest | HealthRequest | CredentialRequest | DeleteCredentialRequest | CheckUpdateRequest | ApplyUpdateRequest
+interface StorageTestRequest {
+  action: 'test-storage'
+}
+
+type SettingsRequest = SaveRequest | HealthRequest | CredentialRequest | DeleteCredentialRequest | CheckUpdateRequest | ApplyUpdateRequest | StorageTestRequest
 
 interface JsonError {
   ok: false
@@ -261,6 +271,7 @@ function parseRequest(value: unknown): SettingsRequest {
     }
     return { action: 'apply-update', expectedVersion: value.expectedVersion.trim() }
   }
+  if (value.action === 'test-storage') return { action: 'test-storage' }
   throw new TypeError(`unsupported action: ${value.action}`)
 }
 
@@ -315,6 +326,14 @@ export class VisionToolkitWebBackend {
         writable: info.writable,
       }
     }))
+    const objectStorageRef = resolved.objectStorage.credential === undefined ? '' : String(resolved.objectStorage.credential)
+    const objectStorageCredential = objectStorageRef === ''
+      ? { ref: '', configured: false, writable: this.ctx.settings.writable }
+      : await this.ctx.credentials.describe(credentialRef(objectStorageRef)).then(info => ({
+        ref: objectStorageRef,
+        configured: info.configured,
+        writable: info.writable,
+      }))
     const update = await this.updater.capability()
     return {
       schemaVersion: 1,
@@ -333,6 +352,7 @@ export class VisionToolkitWebBackend {
         writable: credential.writable,
       },
       credentials,
+      objectStorageCredential,
       runtime: this.manager.status(),
       release: {
         pluginVersion: PLUGIN_VERSION,
@@ -380,10 +400,18 @@ export class VisionToolkitWebBackend {
       )
     }
     const resolved = resolveConfig(descriptor.value as VisionToolkitConfig)
-    const provider = resolved.providers.find(entry => String(entry.credential) === String(request.ref))
+    const ref = String(request.ref)
+    if (resolved.objectStorage.credential !== undefined && String(resolved.objectStorage.credential) === ref) {
+      if (!request.value.includes(':')) {
+        throw new Error('object storage credential must be "accessKeyId:secretAccessKey"')
+      }
+      await this.ctx.credentials.set(request.ref, request.value)
+      return this.snapshot()
+    }
+    const provider = resolved.providers.find(entry => String(entry.credential) === ref)
     if (provider === undefined) {
       throw new CredentialReferenceConflictError(
-        `credential reference "${String(request.ref)}" does not match any configured vision provider; reload Settings and try again`,
+        `credential reference "${ref}" does not match any configured vision provider; reload Settings and try again`,
       )
     }
     if (isBuiltInFreeVisionProvider(provider)) {
@@ -426,6 +454,11 @@ export class VisionToolkitWebBackend {
     }
   }
 
+  private async testStorage(): Promise<{ detail: string }> {
+    if (!this.manager.ready) throw new Error('runtime is not ready; fix Settings and save a valid configuration first')
+    return this.manager.current().testObjectStorage()
+  }
+
   /** Handle the exact Settings route. */
   async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (req.method === 'GET') {
@@ -458,6 +491,9 @@ export class VisionToolkitWebBackend {
         case 'health':
           responseJson(res, 200, { ok: true, value: await this.health(parsed, req) })
           break
+        case 'test-storage':
+          responseJson(res, 200, { ok: true, value: await this.testStorage() })
+          break
         case 'save':
           responseJson(res, 200, { ok: true, value: await this.save(parsed) })
           break
@@ -486,14 +522,16 @@ export class VisionToolkitWebBackend {
             ? error.code
           : parsed.action === 'health'
             ? 'health-failed'
-            : parsed.action === 'credential'
-              ? 'credential-rejected'
-              : 'settings-rejected'
+            : parsed.action === 'test-storage'
+              ? 'storage-test-failed'
+              : parsed.action === 'credential'
+                ? 'credential-rejected'
+                : 'settings-rejected'
       const updateConflict = updateError && ['update-in-progress', 'update-stale', 'update-unavailable', 'already-current'].includes(error.code)
       const updateGateway = updateError && error.code === 'update-check-failed'
       const status = settingsConflict || credentialConflict || updateConflict
         ? 409
-        : parsed.action === 'health'
+        : parsed.action === 'health' || parsed.action === 'test-storage'
           ? 503
           : updateGateway
             ? 502
