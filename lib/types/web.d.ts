@@ -91,6 +91,7 @@ export declare class VisionToolkitWebBackend {
     private deleteCredential;
     private health;
     private testStorage;
+    private testVideo;
     /** Handle the exact Settings route. */
     handle(req: IncomingMessage, res: ServerResponse): Promise<void>;
 }

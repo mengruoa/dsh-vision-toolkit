@@ -46,6 +46,8 @@ declare const en: {
     readonly streamHint: "Request a streamed (SSE) completion instead of one JSON response. Use it for endpoints with weak non-streaming support or that time out on long outputs.";
     readonly uploadViaUrl: "Transfer images via URL";
     readonly uploadViaUrlHint: "Upload each image to the configured object storage and send the model a URL instead of base64. Requires object storage (below); region crops fall back to base64.";
+    readonly videoSupport: "Enable video support";
+    readonly videoSupportHint: "OpenAI-compatible video understanding. This setting is hidden for Anthropic providers and is currently a placeholder with no effect yet.";
     readonly language: "Output language";
     readonly limits: "Timeout and concurrency";
     readonly timeout: "Request timeout (ms)";
@@ -100,8 +102,10 @@ declare const en: {
     readonly runHealth: "Run health check";
     readonly testConnection: "Test API connection";
     readonly testModel: "Test vision model";
+    readonly testVideo: "Test video call";
     readonly testing: "Checking…";
     readonly testingModel: "Testing model…";
+    readonly testingVideo: "Testing video…";
     readonly connectionHint: "The API connection test only queries GET /models. The vision model test sends the bundled diagnostic image and verifies one real multimodal request.";
     readonly saveBeforeTesting: "Save service changes before testing the connection.";
     readonly advanced: "Advanced settings";
@@ -281,6 +285,7 @@ interface ProviderValue {
     userAgent?: string;
     stream?: boolean;
     uploadViaUrl?: boolean;
+    videoSupport?: boolean;
     t1Seconds?: number;
     t2Seconds?: number;
     maxImageBytes?: number;
@@ -298,6 +303,7 @@ interface SettingsValue {
         userAgent?: string;
         stream?: boolean;
         uploadViaUrl?: boolean;
+        videoSupport?: boolean;
     };
     providers?: ProviderValue[];
     language?: 'zh' | 'en';
@@ -416,7 +422,10 @@ interface SettingsState {
     storageTest?: {
         detail: string;
     } | undefined;
-    action?: 'save' | 'health' | 'connection' | 'model' | 'check-update' | 'apply-update' | 'test-storage' | undefined;
+    videoTest?: {
+        detail: string;
+    } | undefined;
+    action?: 'save' | 'health' | 'connection' | 'model' | 'check-update' | 'apply-update' | 'test-storage' | 'test-video' | undefined;
     message?: string | undefined;
     error?: string | undefined;
 }
@@ -436,6 +445,7 @@ export declare class VisionSettingsController {
     }>, writeSettings: boolean): Promise<boolean>;
     runHealth(mode: 'health' | 'connection' | 'model', providerIndex?: number): Promise<void>;
     testStorage(): Promise<void>;
+    runVideoTest(providerIndex?: number): Promise<void>;
     checkUpdate(): Promise<void>;
     applyUpdate(expectedVersion: string): Promise<void>;
     reportRestartTimeout(message: string): void;

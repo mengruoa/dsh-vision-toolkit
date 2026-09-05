@@ -37,6 +37,8 @@ export interface VisionProviderConfig {
     stream?: boolean;
     /** Whether to upload images to object storage and send the model a URL instead of base64 (default false). */
     uploadViaUrl?: boolean;
+    /** OpenAI-compatible video understanding (default false); Anthropic providers ignore this placeholder flag. */
+    videoSupport?: boolean;
     /** t1: per-request hedge threshold in seconds. A single request exceeding t1 keeps running while the next provider starts in parallel. */
     t1Seconds?: number;
     /** t2: per-provider cumulative cutoff in seconds. Total accumulated request time reaching t2 terminates the provider. */
@@ -69,6 +71,8 @@ export interface VisionToolkitConfig {
         stream?: boolean;
         /** Whether to upload images to object storage and send the model a URL instead of base64 (default false). */
         uploadViaUrl?: boolean;
+        /** OpenAI-compatible video understanding (default false); Anthropic providers ignore this placeholder flag. */
+        videoSupport?: boolean;
     };
     /** Ordered online vision providers; array order is the failover priority. */
     providers?: VisionProviderConfig[];
@@ -166,6 +170,7 @@ export interface ResolvedProvider {
     userAgent: string;
     stream: boolean;
     uploadViaUrl: boolean;
+    videoSupport: boolean;
     t1Seconds: number;
     t2Seconds: number;
     maxImageBytes: number;
@@ -184,6 +189,7 @@ export interface ResolvedVisionToolkitConfig {
         userAgent: string;
         stream: boolean;
         uploadViaUrl: boolean;
+        videoSupport: boolean;
     };
     /** Ordered failover pool; array order is the priority, highest first. */
     providers: ResolvedProvider[];

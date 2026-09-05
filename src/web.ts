@@ -131,7 +131,13 @@ interface StorageTestRequest {
   action: 'test-storage'
 }
 
-type SettingsRequest = SaveRequest | HealthRequest | CredentialRequest | DeleteCredentialRequest | CheckUpdateRequest | ApplyUpdateRequest | StorageTestRequest
+interface VideoTestRequest {
+  action: 'test-video'
+  /** 0-based provider index; when absent, the primary provider is tested. */
+  providerIndex?: number
+}
+
+type SettingsRequest = SaveRequest | HealthRequest | CredentialRequest | DeleteCredentialRequest | CheckUpdateRequest | ApplyUpdateRequest | StorageTestRequest | VideoTestRequest
 
 interface JsonError {
   ok: false
@@ -272,6 +278,16 @@ function parseRequest(value: unknown): SettingsRequest {
     return { action: 'apply-update', expectedVersion: value.expectedVersion.trim() }
   }
   if (value.action === 'test-storage') return { action: 'test-storage' }
+  if (value.action === 'test-video') {
+    const providerIndex = value.providerIndex
+    if (providerIndex !== undefined && (!Number.isSafeInteger(providerIndex) || (providerIndex as number) < 0)) {
+      throw new TypeError('test-video.providerIndex must be a non-negative integer')
+    }
+    return {
+      action: 'test-video',
+      ...(providerIndex === undefined ? {} : { providerIndex: providerIndex as number }),
+    }
+  }
   throw new TypeError(`unsupported action: ${value.action}`)
 }
 
@@ -459,6 +475,33 @@ export class VisionToolkitWebBackend {
     return this.manager.current().testObjectStorage()
   }
 
+  private async testVideo(request: VideoTestRequest, req: IncomingMessage): Promise<{ detail: string }> {
+    if (!this.manager.ready) throw new Error('runtime is not ready; fix Settings and save a valid configuration first')
+    const controller = new AbortController()
+    const abort = (): void => { controller.abort() }
+    req.once('aborted', abort)
+    req.socket.once('close', abort)
+    try {
+      const runtime = this.manager.current()
+      let provider: ResolvedProvider | undefined
+      if (request.providerIndex !== undefined) {
+        const resolved = resolveConfig(descriptorOf(this.ctx).value as VisionToolkitConfig)
+        provider = resolved.providers[request.providerIndex]
+        if (provider === undefined) {
+          throw new Error(`provider index ${request.providerIndex} is out of range`)
+        }
+      }
+      return await runtime.testVideoCall({
+        signal: controller.signal,
+        workspace: runtime.upstreamVersion.runtimeHome,
+        sessionId: 'vision-toolkit-settings',
+      }, provider)
+    } finally {
+      req.off('aborted', abort)
+      req.socket.off('close', abort)
+    }
+  }
+
   /** Handle the exact Settings route. */
   async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (req.method === 'GET') {
@@ -494,6 +537,9 @@ export class VisionToolkitWebBackend {
         case 'test-storage':
           responseJson(res, 200, { ok: true, value: await this.testStorage() })
           break
+        case 'test-video':
+          responseJson(res, 200, { ok: true, value: await this.testVideo(parsed, req) })
+          break
         case 'save':
           responseJson(res, 200, { ok: true, value: await this.save(parsed) })
           break
@@ -524,14 +570,16 @@ export class VisionToolkitWebBackend {
             ? 'health-failed'
             : parsed.action === 'test-storage'
               ? 'storage-test-failed'
-              : parsed.action === 'credential'
-                ? 'credential-rejected'
-                : 'settings-rejected'
+              : parsed.action === 'test-video'
+                ? 'video-test-failed'
+                : parsed.action === 'credential'
+                  ? 'credential-rejected'
+                  : 'settings-rejected'
       const updateConflict = updateError && ['update-in-progress', 'update-stale', 'update-unavailable', 'already-current'].includes(error.code)
       const updateGateway = updateError && error.code === 'update-check-failed'
       const status = settingsConflict || credentialConflict || updateConflict
         ? 409
-        : parsed.action === 'health' || parsed.action === 'test-storage'
+        : parsed.action === 'health' || parsed.action === 'test-storage' || parsed.action === 'test-video'
           ? 503
           : updateGateway
             ? 502

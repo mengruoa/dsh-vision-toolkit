@@ -81,6 +81,8 @@ export interface VisionProviderConfig {
   stream?: boolean
   /** Whether to upload images to object storage and send the model a URL instead of base64 (default false). */
   uploadViaUrl?: boolean
+  /** OpenAI-compatible video understanding (default false); Anthropic providers ignore this placeholder flag. */
+  videoSupport?: boolean
   /** t1: per-request hedge threshold in seconds. A single request exceeding t1 keeps running while the next provider starts in parallel. */
   t1Seconds?: number
   /** t2: per-provider cumulative cutoff in seconds. Total accumulated request time reaching t2 terminates the provider. */
@@ -114,6 +116,8 @@ export interface VisionToolkitConfig {
     stream?: boolean
     /** Whether to upload images to object storage and send the model a URL instead of base64 (default false). */
     uploadViaUrl?: boolean
+    /** OpenAI-compatible video understanding (default false); Anthropic providers ignore this placeholder flag. */
+    videoSupport?: boolean
   }
   /** Ordered online vision providers; array order is the failover priority. */
   providers?: VisionProviderConfig[]
@@ -219,6 +223,7 @@ export const Config: Schema<VisionToolkitConfig> = z.object({
     userAgent: z.string(),
     stream: z.boolean().default(false),
     uploadViaUrl: z.boolean().default(false),
+    videoSupport: z.boolean().default(false),
     t1Seconds: z.number(),
     t2Seconds: z.number(),
     maxImageBytes: z.number(),
@@ -269,6 +274,7 @@ export interface ResolvedProvider {
   userAgent: string
   stream: boolean
   uploadViaUrl: boolean
+  videoSupport: boolean
   t1Seconds: number
   t2Seconds: number
   maxImageBytes: number
@@ -288,6 +294,7 @@ export interface ResolvedVisionToolkitConfig {
     userAgent: string
     stream: boolean
     uploadViaUrl: boolean
+    videoSupport: boolean
   }
   /** Ordered failover pool; array order is the priority, highest first. */
   providers: ResolvedProvider[]
@@ -410,6 +417,7 @@ function resolveProvider(
   }
   const stream = input.stream === true
   const uploadViaUrl = input.uploadViaUrl === true
+  const videoSupport = input.videoSupport === true
   const t1Seconds = input.t1Seconds ?? 90
   if (!Number.isInteger(t1Seconds) || t1Seconds < 1 || t1Seconds > MAX_TIMEOUT_SECONDS) {
     throw new VisionToolkitError('config', `${label}.t1Seconds must be an integer between 1 and ${MAX_TIMEOUT_SECONDS}`)
@@ -448,6 +456,7 @@ function resolveProvider(
     userAgent,
     stream,
     uploadViaUrl,
+    videoSupport,
     t1Seconds,
     t2Seconds,
     maxImageBytes,
@@ -555,6 +564,7 @@ export function resolveConfig(config: VisionToolkitConfig = {}): ResolvedVisionT
       userAgent: primary.userAgent,
       stream: primary.stream,
       uploadViaUrl: primary.uploadViaUrl,
+      videoSupport: primary.videoSupport,
     },
     providers,
     language,

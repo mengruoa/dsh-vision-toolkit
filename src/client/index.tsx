@@ -77,6 +77,8 @@ const en = {
   streamHint: 'Request a streamed (SSE) completion instead of one JSON response. Use it for endpoints with weak non-streaming support or that time out on long outputs.',
   uploadViaUrl: 'Transfer images via URL',
   uploadViaUrlHint: 'Upload each image to the configured object storage and send the model a URL instead of base64. Requires object storage (below); region crops fall back to base64.',
+  videoSupport: 'Enable video support',
+  videoSupportHint: 'OpenAI-compatible video understanding. This setting is hidden for Anthropic providers and is currently a placeholder with no effect yet.',
   language: 'Output language',
   limits: 'Timeout and concurrency',
   timeout: 'Request timeout (ms)',
@@ -131,8 +133,10 @@ const en = {
   runHealth: 'Run health check',
   testConnection: 'Test API connection',
   testModel: 'Test vision model',
+  testVideo: 'Test video call',
   testing: 'Checking…',
   testingModel: 'Testing model…',
+  testingVideo: 'Testing video…',
   connectionHint: 'The API connection test only queries GET /models. The vision model test sends the bundled diagnostic image and verifies one real multimodal request.',
   saveBeforeTesting: 'Save service changes before testing the connection.',
   advanced: 'Advanced settings',
@@ -312,6 +316,8 @@ const zh: Record<LocaleKey, string> = {
   streamHint: '以流式（SSE）方式请求补全，而非一次性返回 JSON。适合对非流式支持不佳、长输出易连接超时的端点。',
   uploadViaUrl: '通过 URL 传输图片',
   uploadViaUrlHint: '把每张图片上传到下方配置的对象存储，将 URL 传给模型而不是 base64。需要先配置对象存储；使用 region 裁剪时回退为 base64。',
+  videoSupport: '启用视频支持',
+  videoSupportHint: 'OpenAI 兼容接口的视频理解能力。Anthropic 服务不显示此项；当前为占位设置，尚未生效。',
   language: '结果语言',
   limits: '超时与并发限制',
   timeout: '单次请求超时（毫秒）',
@@ -366,8 +372,10 @@ const zh: Record<LocaleKey, string> = {
   runHealth: '检查本地环境',
   testConnection: '测试 API 连接',
   testModel: '测试视觉模型',
+  testVideo: '测试视频调用',
   testing: '检查中…',
   testingModel: '正在测试模型…',
+  testingVideo: '正在测试视频…',
   connectionHint: '“测试 API 连接”只请求 GET /models；“测试视觉模型”会发送插件自带的诊断图片，验证一次真实多模态调用。',
   saveBeforeTesting: '修改服务配置后，请先保存，再执行 API 或视觉模型测试。',
   advanced: '高级设置',
@@ -569,6 +577,7 @@ interface ProviderValue {
   userAgent?: string
   stream?: boolean
   uploadViaUrl?: boolean
+  videoSupport?: boolean
   t1Seconds?: number
   t2Seconds?: number
   maxImageBytes?: number
@@ -587,6 +596,7 @@ interface SettingsValue {
     userAgent?: string
     stream?: boolean
     uploadViaUrl?: boolean
+    videoSupport?: boolean
   }
   providers?: ProviderValue[]
   language?: 'zh' | 'en'
@@ -1049,7 +1059,8 @@ interface SettingsState {
   update?: PluginUpdateCheck | undefined
   restart?: PluginUpdateResult | undefined
   storageTest?: { detail: string } | undefined
-  action?: 'save' | 'health' | 'connection' | 'model' | 'check-update' | 'apply-update' | 'test-storage' | undefined
+  videoTest?: { detail: string } | undefined
+  action?: 'save' | 'health' | 'connection' | 'model' | 'check-update' | 'apply-update' | 'test-storage' | 'test-video' | undefined
   message?: string | undefined
   error?: string | undefined
 }
@@ -1198,6 +1209,20 @@ export class VisionSettingsController {
     }
   }
 
+  async runVideoTest(providerIndex?: number): Promise<void> {
+    this.set({ ...this.state, action: 'test-video', error: undefined, message: undefined })
+    try {
+      const result = await apiRequest<{ detail: string }>({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'test-video', ...(providerIndex === undefined ? {} : { providerIndex }) }),
+      })
+      this.set({ ...this.state, action: undefined, videoTest: result })
+    } catch (error) {
+      this.set({ ...this.state, action: undefined, error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
   async checkUpdate(): Promise<void> {
     this.set({ ...this.state, action: 'check-update', error: undefined, message: undefined })
     try {
@@ -1248,6 +1273,7 @@ interface ProviderDraft {
   userAgent: string
   stream: boolean
   uploadViaUrl: boolean
+  videoSupport: boolean
   t1Seconds: string
   t2Seconds: string
   maxImageBytes: string
@@ -1313,6 +1339,7 @@ function emptyProviderDraft(defaults: ProviderDefaults): ProviderDraft {
     userAgent: DEFAULT_USER_AGENT,
     stream: false,
     uploadViaUrl: false,
+    videoSupport: false,
     t1Seconds: '90',
     t2Seconds: '90',
     maxImageBytes: String(defaults.maxImageBytes),
@@ -1337,6 +1364,7 @@ function providerDraftOf(value: ProviderValue | undefined, fallback: ProviderVal
     userAgent: source?.userAgent ?? DEFAULT_USER_AGENT,
     stream: source?.stream === true,
     uploadViaUrl: source?.uploadViaUrl === true,
+    videoSupport: source?.videoSupport === true,
     t1Seconds: String(source?.t1Seconds ?? 90),
     t2Seconds: String(source?.t2Seconds ?? 90),
     maxImageBytes: String(source?.maxImageBytes ?? defaults.maxImageBytes),
@@ -1409,6 +1437,7 @@ function valueOf(draft: Draft, t: Translate): SettingsValue {
     ...(provider.userAgent.trim() === DEFAULT_USER_AGENT ? {} : { userAgent: provider.userAgent.trim() }),
     ...(provider.stream ? { stream: true } : {}),
     ...(provider.uploadViaUrl ? { uploadViaUrl: true } : {}),
+    ...(provider.videoSupport ? { videoSupport: true } : {}),
     ...(provider.t1Seconds.trim().length === 0 ? {} : { t1Seconds: positiveInteger(provider.t1Seconds, t('t1'), t) }),
     ...(provider.t2Seconds.trim().length === 0 ? {} : { t2Seconds: positiveInteger(provider.t2Seconds, t('t2'), t) }),
     ...(provider.maxImageBytes.trim().length === 0 ? {} : { maxImageBytes: positiveInteger(provider.maxImageBytes, t('maxBytes'), t) }),
@@ -1427,6 +1456,7 @@ function valueOf(draft: Draft, t: Translate): SettingsValue {
       userAgent: primary?.userAgent.trim() || DEFAULT_USER_AGENT,
       stream: primary?.stream === true,
       uploadViaUrl: primary?.uploadViaUrl === true,
+      videoSupport: primary?.videoSupport === true,
     },
     providers,
     language: draft.language,
@@ -1803,6 +1833,7 @@ function LoadedSettings({ controller, t }: SettingsInjected) {
               <Field label={t('userAgent')}><Input aria-label={t('userAgent')} value={selectedProvider.userAgent} onChange={(event) => { updateProvider(selectedIndex, 'userAgent', event.target.value) }} /></Field>
               <Field label={t('stream')} hint={t('streamHint')}><select aria-label={t('stream')} disabled={!snapshot.writable || busy} value={selectedProvider.stream ? 'enabled' : 'disabled'} onChange={(event) => { updateProvider(selectedIndex, 'stream', event.target.value === 'enabled') }}><option value="disabled">{t('disabled')}</option><option value="enabled">{t('enabled')}</option></select></Field>
               <Field label={t('uploadViaUrl')} hint={t('uploadViaUrlHint')}><select aria-label={t('uploadViaUrl')} disabled={!snapshot.writable || busy} value={selectedProvider.uploadViaUrl ? 'enabled' : 'disabled'} onChange={(event) => { updateProvider(selectedIndex, 'uploadViaUrl', event.target.value === 'enabled') }}><option value="disabled">{t('disabled')}</option><option value="enabled">{t('enabled')}</option></select></Field>
+              {selectedProvider.protocol === 'openai' ? <Field label={t('videoSupport')} hint={t('videoSupportHint')}><select aria-label={t('videoSupport')} disabled={!snapshot.writable || busy} value={selectedProvider.videoSupport ? 'enabled' : 'disabled'} onChange={(event) => { updateProvider(selectedIndex, 'videoSupport', event.target.value === 'enabled') }}><option value="disabled">{t('disabled')}</option><option value="enabled">{t('enabled')}</option></select></Field> : null}
               <Field label={t('t1')} hint={t('t1Hint')}><Input aria-label={t('t1')} inputMode="numeric" value={selectedProvider.t1Seconds} onChange={(event) => { updateProvider(selectedIndex, 't1Seconds', event.target.value) }} /></Field>
               <Field label={t('t2')} hint={t('t2Hint')}><Input aria-label={t('t2')} inputMode="numeric" value={selectedProvider.t2Seconds} onChange={(event) => { updateProvider(selectedIndex, 't2Seconds', event.target.value) }} /></Field>
               <Field label={t('maxBytes')}><Input aria-label={t('maxBytes')} inputMode="numeric" value={selectedProvider.maxImageBytes} onChange={(event) => { updateProvider(selectedIndex, 'maxImageBytes', event.target.value) }} /></Field>
@@ -1814,12 +1845,14 @@ function LoadedSettings({ controller, t }: SettingsInjected) {
             <div className="dvt-provider-tests">
               <Button size="sm" variant="outline" disabled={busy || !snapshot.runtime.ready} onClick={() => { void controller.runHealth('connection', selectedIndex) }}>{state.action === 'connection' ? t('testing') : t('testConnection')}</Button>
               <Button size="sm" variant="primary" disabled={busy || !snapshot.runtime.ready} onClick={() => { void controller.runHealth('model', selectedIndex) }}>{state.action === 'model' ? t('testingModel') : t('testModel')}</Button>
+              {selectedProvider.protocol === 'openai' ? <Button size="sm" variant="primary" disabled={busy || !snapshot.runtime.ready} onClick={() => { void controller.runVideoTest(selectedIndex) }}>{state.action === 'test-video' ? t('testingVideo') : t('testVideo')}</Button> : null}
             </div>
             {providerHealth === undefined ? null : <div className="dvt-provider-test-result">{(['service', 'model'] as const).map(name => {
               const check = providerHealth.checks[name]
               if (check === undefined) return null
               return <div key={name} data-status={check.status}><span>{t(HEALTH_NAME_KEYS[name] ?? 'health')}</span><strong>{t(HEALTH_STATUS_KEYS[check.status])}</strong><p>{healthDetail(name, check.detail, t)}</p></div>
             })}</div>}
+            {state.videoTest === undefined ? null : <div className="dvt-provider-test-result"><div data-status="ok"><span>{t('videoSupport')}</span><strong>{t('statusOk')}</strong><p>{state.videoTest.detail}</p></div></div>}
           </div>
         )}
       </section>

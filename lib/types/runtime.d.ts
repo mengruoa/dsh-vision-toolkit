@@ -437,6 +437,15 @@ export declare class VisionToolkitRuntime {
     testObjectStorage(): Promise<{
         detail: string;
     }>;
+    /**
+     * Settings "test video call" probe: upload the bundled diagnostic video to
+     * object storage and send one OpenAI-compatible (Aliyun Qwen) video request.
+     * The wire content uses the Qwen video block shape (`video_url` + `fps`) plus
+     * the fixed test question. The object is deleted afterwards, best-effort.
+     */
+    testVideoCall(options: ToolCallOptions, provider?: ResolvedProvider): Promise<{
+        detail: string;
+    }>;
     /** Stable gate key for one provider's in-flight request cap. */
     private providerGate;
     /**
