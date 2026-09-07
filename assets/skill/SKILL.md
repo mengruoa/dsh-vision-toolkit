@@ -1,15 +1,25 @@
 # vision-skills
 
-Ten native DSH tools give a text-only agent eyes. Use these structured tools
+Native DSH tools give a text-only agent eyes. Use these structured tools
 directly; do not shell out to the bundled Python scripts or reproduce their
 implementation. Vision API credentials and model settings are managed by the
 plugin, so tool calls do not receive credentials.
 
 The visual execution schemas are mounted only for the current Agent after this
 Skill is loaded. A normal `skill` call activates them for the next model step.
-If this content arrived through a direct `/vision-skills` invocation and the
-visual tools are still absent, call `vision_toolkit_activate` once. Do not call
-that bootstrap when the visual tools are already present.
+Which tools actually mount is governed by the plugin's **tool-visibility**
+snapshot in Settings (local / on-line / video buckets); each bucket's tools
+appear only when that bucket is enabled. If this content arrived through a
+direct `/vision-skills` invocation and a listed tool is still absent, call
+`vision_toolkit_activate` once **only when the user explicitly asks you to
+refresh or list the current vision tools** — doing so re-reads the latest
+Settings snapshot and returns the tool names currently mounted. Do not call
+that bootstrap just to discover the tool list on ordinary image work.
+
+Concurrency applies only to on-line vision calls (glance, ground, detect,
+long-screenshot OCR, video understanding); the local-processing tools (trace,
+crop, pixel diff, foreground, colors, HTML screenshot, video info) run
+immediately and are not throttled by it.
 
 Pick the tool by the question you are answering:
 
@@ -239,6 +249,27 @@ significant colours and their shares. Candidate mode scores each supplied
 value against the pixels and returns the winner. Take the value from here,
 never from `vision_glance` prose.
 
+## Vision tools (video) — info is local, understanding is on-line
+
+Both video tools live under the plugin's **video tool bucket** in Settings
+(the video-understanding one is experimental and off by default). When their
+bucket is enabled:
+
+```json
+{"video":"clip.mp4"}
+{"video":"clip.mp4","prompt":"what happens in this video?","fps":2}
+```
+
+- `vision_video_info` — local ffprobe probe of a video file's metadata
+  (format, duration, resolution, frame rate, codecs). No API call, no
+  credential, never throttled by concurrency. This is in the **local** bucket,
+  not the video bucket.
+- `vision_video_understand` — uploads the video to object storage and sends it
+  plus your prompt to a configured vision service. It requires a video-capable
+  vision service; if none is enabled, the call returns a
+  "video understanding unavailable" config error — do not retry it with a
+  different wording. This is in the **video** bucket.
+
 ## Prefer a durable path; platform temp paths are supported
 
 Use workspace storage when the image or a derived artifact must remain
@@ -318,7 +349,8 @@ resource base and load only the relevant file.
 - Only PNG / JPEG / GIF / WebP images are supported.
 - `vision_html_screenshot` accepts local `.html` / `.htm` files only, not URLs
   or data URIs.
-- If a visual tool is absent after Skill activation, report that the plugin
+- If a visual tool is absent after Skill activation, first check whether its
+  tool-visibility bucket is disabled in Settings; report that the plugin
   runtime is unavailable instead of improvising a shell replacement.
 - If a tool fails, relay its stable error faithfully and fix the identified
   path, limit, Credential, runtime, or service condition. Never fabricate image

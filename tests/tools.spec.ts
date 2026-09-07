@@ -212,7 +212,7 @@ async function loadVisionSkill(ctx: Context, agent: Agent): Promise<void> {
   expect(result.isError, JSON.stringify(result)).toBe(false)
 }
 
-async function setupContext(toolkitPath: string, videoSupport = false) {
+async function setupContext(toolkitPath: string, toolVisibilityOverrides?: { local?: boolean; online?: boolean; video?: boolean }) {
   const ctx = new Context()
   contexts.push(ctx)
   await ctx.plugin(SystemPrompt)
@@ -229,9 +229,9 @@ async function setupContext(toolkitPath: string, videoSupport = false) {
       baseUrl: 'https://vision.example/v1',
       credential: 'VISION_API_KEY',
       model: 'fixture-model',
-      videoSupport,
     },
     runtime: { mode: 'external', agentVisionToolkitPath: toolkitPath, python: 'python3' },
+    ...(toolVisibilityOverrides === undefined ? {} : { toolVisibility: toolVisibilityOverrides }),
   })
   return { ctx, fiber }
 }
@@ -277,15 +277,15 @@ describe('dsh-vision-toolkit plugin lifecycle', () => {
     expect(ctx.tools.schemas(untouched).some(tool => TOOL_NAMES.includes(tool.name))).toBe(false)
   })
 
-  it('exposes the video-understanding tool only when a vision service enables video support', async () => {
-    const off = await setupContext(BUNDLED_UPSTREAM, false)
+  it('exposes the video-understanding tool only when the video tool bucket is enabled', async () => {
+    const off = await setupContext(BUNDLED_UPSTREAM, { video: false })
     const offAgent = await registerAgent(off.ctx, 'video-off')
     await loadVisionSkill(off.ctx, offAgent)
     const offNames = off.ctx.tools.schemas(offAgent).map(tool => tool.name)
     expect(offNames).toContain(VISION_TOOL_NAMES.videoInfo)
     expect(offNames).not.toContain(VISION_VIDEO_UNDERSTAND_TOOL)
 
-    const on = await setupContext(BUNDLED_UPSTREAM, true)
+    const on = await setupContext(BUNDLED_UPSTREAM, { video: true })
     const onAgent = await registerAgent(on.ctx, 'video-on')
     await loadVisionSkill(on.ctx, onAgent)
     const onNames = on.ctx.tools.schemas(onAgent).map(tool => tool.name)

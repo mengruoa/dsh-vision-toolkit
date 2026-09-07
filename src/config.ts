@@ -198,6 +198,21 @@ export interface VisionToolkitConfig {
      */
     hidden?: boolean
   }
+  /**
+   * Per-group tool visibility, applied when each Agent's visual tool set is
+   * materialized (a session-head snapshot: an already-active Agent keeps its
+   * activation-time set; a change only affects the next Agent's tool set).
+   * Tools are grouped into three buckets; a bucket that is off contributes none
+   * of its tools to an Agent's visible surface.
+   */
+  toolVisibility?: {
+    /** Local-processing tools (no on-line fan-out, no concurrency charge). Default true. */
+    local?: boolean
+    /** On-line image tools plus the concurrency/status probe. Default true. */
+    online?: boolean
+    /** Video-understanding tool (experimental). Default false. */
+    video?: boolean
+  }
 }
 
 /** Configuration schema with the documented P0 defaults. */
@@ -259,6 +274,11 @@ export const Config: Schema<VisionToolkitConfig> = z.object({
     providers: z.array(z.string()).default([]),
     autoSwitch: z.boolean().default(true),
     hidden: z.boolean().default(true),
+  }),
+  toolVisibility: z.object({
+    local: z.boolean().default(true),
+    online: z.boolean().default(true),
+    video: z.boolean().default(false),
   }),
 })
 
@@ -326,6 +346,11 @@ export interface ResolvedVisionToolkitConfig {
     providers: string[]
     autoSwitch: boolean
     hidden: boolean
+  }
+  toolVisibility: {
+    local: boolean
+    online: boolean
+    video: boolean
   }
 }
 
@@ -546,6 +571,7 @@ export function resolveConfig(config: VisionToolkitConfig = {}): ResolvedVisionT
   const variantProviders = (imageInputVariants.providers ?? [])
     .map(provider => provider.trim())
     .filter(provider => provider.length > 0)
+  const toolVisibility = config.toolVisibility ?? {}
   const providerDefaults: ProviderDefaults = { maxImageBytes, maxImagePixels, concurrency }
   const configuredProviders = config.providers ?? []
   if (configuredProviders.length > MAX_PROVIDERS) {
@@ -595,6 +621,11 @@ export function resolveConfig(config: VisionToolkitConfig = {}): ResolvedVisionT
       providers: variantProviders,
       autoSwitch: imageInputVariants.autoSwitch ?? true,
       hidden: imageInputVariants.hidden ?? true,
+    },
+    toolVisibility: {
+      local: toolVisibility.local ?? true,
+      online: toolVisibility.online ?? true,
+      video: toolVisibility.video ?? false,
     },
   }
 }

@@ -4,6 +4,16 @@ All notable user-facing changes to DSH Vision Toolkit are documented in this fil
 
 ## [Unreleased]
 
+## [0.1.6-beta.0] - 2026-09-07
+
+### Added
+
+- Local video tooling: read local video info and describe its contents (experimental). A new `vision_video_understand` tool sends a local video to the vision service via object storage (Aliyun Qwen `video_url` format) and returns its answer.
+- Per-group tool visibility (`toolVisibility`) with three buckets applied as a session-head snapshot: `local` (local-processing tools, no on-line fan-out), `online` (on-line image tools plus the concurrency probe), and `video` (video-understanding, default off). A bucket that is off contributes none of its tools to an Agent's visible surface; an already-active Agent keeps its activation-time set.
+- Added a design/implementation spec document for the per-tool visibility switches.
+
+> This is a **pre-release (beta)** build. The package is published with the `beta` dist-tag; `latest` stays on `0.1.5`.
+
 ## [0.1.5] - 2026-09-04
 
 ### Added

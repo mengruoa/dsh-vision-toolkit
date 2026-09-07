@@ -145,6 +145,14 @@ const en = {
   hiddenVariants: 'Transparent variant routing',
   hiddenVariantsLabel: 'Keep the original model names and enable images automatically',
   hiddenVariantsHint: 'Text-only models keep one model-selector entry with the original name while the session runs on the image-capable variant. Pasted images, image history, and the built-in read_image tool keep working; disable to restore the explicit (Vision Toolkit) entries.',
+  toolVisibility: 'Tool visibility',
+  toolVisibilityHint: 'Which groups of vision tools an Agent sees. Applies to the next Agent conversation: an already-active Agent keeps its activation-time set until it is reloaded.',
+  toolVisibilityLocal: 'Local tools',
+  toolVisibilityLocalHint: 'trace / crop / pixel diff / foreground / colors / HTML screenshot / video info. Local processing, no on-line parallel limits.',
+  toolVisibilityOnline: 'Online image tools',
+  toolVisibilityOnlineHint: 'glance / ground / detect / long-screenshot OCR, plus the concurrency/status probe. On-line service calls share the session concurrency budget.',
+  toolVisibilityVideo: 'Video tools',
+  toolVisibilityVideoHint: 'video understanding (experimental). Calling it without an enabled video-capable service returns "video understanding unavailable".',
   pluginVersion: 'Plugin',
   upstreamVersion: 'Upstream',
   activeGeneration: 'Runtime generation',
@@ -384,6 +392,14 @@ const zh: Record<LocaleKey, string> = {
   hiddenVariants: '透明变体路由',
   hiddenVariantsLabel: '保留原模型名并自动启用图片能力',
   hiddenVariantsHint: '文本模型在模型列表中只显示原名称，会话实际运行在支持图片的变体路由上：粘贴图片、历史图片和内置 read_image 工具均可正常使用。关闭后恢复显示显式的（Vision Toolkit）条目。',
+  toolVisibility: '工具可见性',
+  toolVisibilityHint: 'Agent 可见的视觉工具分组。仅在下一个 agent 对话中生效：已激活的 agent 保持激活时的工具集，直到重载。',
+  toolVisibilityLocal: '本地工具',
+  toolVisibilityLocalHint: 'trace / crop / 像素对比 / 前景提取 / 取色 / HTML 截图 / 视频信息。本地处理，不受联机并发限制。',
+  toolVisibilityOnline: '联机图片工具',
+  toolVisibilityOnlineHint: 'glance / ground / detect / 长截图 OCR，以及并发/状态查询。联机调用共享会话并发额度。',
+  toolVisibilityVideo: '视频工具',
+  toolVisibilityVideoHint: '视频理解（测试）。调用时若没有已启用且支持视频的服务，将返回“视频理解不可用”。',
   pluginVersion: '插件版本',
   upstreamVersion: '工具包版本',
   activeGeneration: '本次运行已应用',
@@ -621,6 +637,11 @@ interface SettingsValue {
     providers?: string[]
     autoSwitch?: boolean
     hidden?: boolean
+  }
+  toolVisibility?: {
+    local?: boolean
+    online?: boolean
+    video?: boolean
   }
 }
 
@@ -1303,6 +1324,9 @@ interface Draft {
   variantEnabled: boolean
   variantProviders: string
   variantAutoSwitch: boolean
+  toolVisibilityLocal: boolean
+  toolVisibilityOnline: boolean
+  toolVisibilityVideo: boolean
 }
 
 function randomProviderId(): string {
@@ -1405,6 +1429,9 @@ function draftOf(value: SettingsValue): Draft {
     variantEnabled: value.imageInputVariants?.enabled ?? true,
     variantProviders: (value.imageInputVariants?.providers ?? []).join('\n'),
     variantAutoSwitch: value.imageInputVariants?.autoSwitch ?? true,
+    toolVisibilityLocal: value.toolVisibility?.local ?? true,
+    toolVisibilityOnline: value.toolVisibility?.online ?? true,
+    toolVisibilityVideo: value.toolVisibility?.video ?? false,
   }
 }
 
@@ -1490,6 +1517,11 @@ function valueOf(draft: Draft, t: Translate): SettingsValue {
       }),
       ...(draft.variantAutoSwitch ? {} : { autoSwitch: false }),
       hidden: draft.hiddenVariants,
+    },
+    toolVisibility: {
+      local: draft.toolVisibilityLocal,
+      online: draft.toolVisibilityOnline,
+      video: draft.toolVisibilityVideo,
     },
   }
 }
@@ -1919,6 +1951,12 @@ function LoadedSettings({ controller, t }: SettingsInjected) {
           </div></section>
 
           <section className="dvt-panel"><div className="dvt-panel-title"><h3>{t('imageInput')}</h3></div><label className="dvt-check"><input type="checkbox" checked={draft.hiddenVariants} disabled={!snapshot.writable || busy} onChange={(event) => { update('hiddenVariants', event.target.checked) }} /><span>{t('hiddenVariantsLabel')}</span><small>{t('hiddenVariantsHint')}</small></label></section>
+
+          <section className="dvt-panel"><div className="dvt-panel-title"><div><h3>{t('toolVisibility')}</h3><p>{t('toolVisibilityHint')}</p></div></div>
+            <label className="dvt-check"><input type="checkbox" checked={draft.toolVisibilityLocal} disabled={!snapshot.writable || busy} onChange={(event) => { update('toolVisibilityLocal', event.target.checked) }} /><span>{t('toolVisibilityLocal')}</span><small>{t('toolVisibilityLocalHint')}</small></label>
+            <label className="dvt-check"><input type="checkbox" checked={draft.toolVisibilityOnline} disabled={!snapshot.writable || busy} onChange={(event) => { update('toolVisibilityOnline', event.target.checked) }} /><span>{t('toolVisibilityOnline')}</span><small>{t('toolVisibilityOnlineHint')}</small></label>
+            <label className="dvt-check"><input type="checkbox" checked={draft.toolVisibilityVideo} disabled={!snapshot.writable || busy} onChange={(event) => { update('toolVisibilityVideo', event.target.checked) }} /><span>{t('toolVisibilityVideo')} <em>（测试）</em></span><small>{t('toolVisibilityVideoHint')}</small></label>
+          </section>
 
           <section className="dvt-panel"><div className="dvt-panel-title"><h3>{t('storage')}</h3></div><div className="dvt-form-grid">
             <Field label={t('storageDir')} hint={t('storageDirHint')}><Input aria-label={t('storageDir')} placeholder="/tmp/dsh-vision-toolkit" value={draft.storageDir} onChange={(event) => { update('storageDir', event.target.value) }} /></Field>

@@ -83,11 +83,16 @@ export async function apply(ctx: Context, config: VisionToolkitConfig = {}): Pro
 
   const ensureOperational = (): void => {
     if (!manager.ready || operationalDisposers !== undefined) return
-    const exposure = new VisionToolExposure(ctx, () => createVisionTools(
-      () => manager.current(),
-      value => artifacts.presentationMeta(value),
-      lifecycle.signal,
-    ))
+    const exposure = new VisionToolExposure(
+      ctx,
+      (visibility) => createVisionTools(
+        () => manager.current(),
+        value => artifacts.presentationMeta(value),
+        lifecycle.signal,
+        visibility,
+      ),
+      () => manager.currentConfig().toolVisibility,
+    )
     let activationTool: (() => void) | undefined
     let exposureDisposer: (() => void) | undefined
     let skill: (() => void) | undefined

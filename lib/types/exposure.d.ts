@@ -7,6 +7,7 @@
  */
 import { type ToolDefinition } from '@deepseek-ai/dsh-tools';
 import type { Context } from '@deepseek-ai/cordis';
+import { type ToolVisibility } from './tools.ts';
 /** Small bootstrap tool retained only until the current Agent gains visual tools. */
 export declare const VISION_TOOLKIT_ACTIVATE = "vision_toolkit_activate";
 /** Skill name used by releases before the rename to vision-skills. */
@@ -27,18 +28,29 @@ export interface VisionToolkitActivationResult {
 export declare class VisionToolExposure {
     private readonly ctx;
     private readonly createTools;
+    private readonly resolveVisibility;
     readonly activationTool: ToolDefinition;
     private readonly states;
     private installed;
     /**
      * @param ctx - Plugin context with Tool and Agent registries.
-     * @param createTools - Fresh definitions bound to the current runtime generation.
+     * @param createTools - Fresh definitions bound to the current runtime
+     *   generation, filtered by a tool-visibility snapshot.
+     * @param resolveVisibility - Live resolver for the current tool-visibility
+     *   snapshot; read once per activation (a session-head snapshot).
      */
-    constructor(ctx: Context, createTools: () => ToolDefinition[]);
+    constructor(ctx: Context, createTools: (snapshot: ToolVisibility) => ToolDefinition[], resolveVisibility?: () => ToolVisibility);
     /** Install lifecycle listeners and adopt Agents that already exist. */
     install(): () => void;
     private attach;
     private activate;
+    /**
+     * Explicit refresh/reload from the bootstrap tool. An inactive Agent is
+     * mounted; an active Agent is torn down and re-mounted from the *current*
+     * Settings snapshot, so the returned tool list reflects the latest
+     * `toolVisibility` instead of the stale activation-time set.
+     */
+    private reload;
     /** Whether the session is attached to the live SessionStore (production). */
     private isLiveSession;
     private applyHideActivationForSession;

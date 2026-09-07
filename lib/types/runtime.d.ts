@@ -397,8 +397,10 @@ export declare class VisionToolkitRuntime {
     get storageDirectory(): string | undefined;
     /**
      * Whether at least one enabled OpenAI-compatible provider has video support
-     * turned on. Gates the model-facing video-understanding tool so an Agent only
-     * sees it when a vision service can actually accept video.
+     * turned on. A capability probe only: tool visibility is governed by the
+     * Settings tool-visibility video bucket, not by this flag. `videoUnderstand`
+     * re-checks it at call time and reports "video understanding unavailable"
+     * when it is false.
      */
     get videoSupportEnabled(): boolean;
     /** Stable identity for persisted image descriptions produced by this runtime. */
@@ -466,9 +468,11 @@ export declare class VisionToolkitRuntime {
     videoInfo(request: VideoInfoRequest, options: ToolCallOptions): Promise<VideoInfo>;
     /**
      * Video understanding: upload the video to object storage and send it plus a
-     * prompt to the first enabled OpenAI provider with video support. Only
-     * callable when `videoSupportEnabled` is true (the tool is not exposed
-     * otherwise); the runtime re-checks so a stale registration still fails safe.
+     * prompt to the first enabled OpenAI provider with video support. Whether the
+     * tool appears in an Agent is governed by the Settings tool-visibility video
+     * bucket, not by provider capability; this method re-checks capability at
+     * call time and returns a "video understanding unavailable" config error when
+     * no enabled provider supports video.
      */
     videoUnderstand(request: VideoUnderstandRequest, options: ToolCallOptions): Promise<VideoUnderstandResult>;
     /** Stable gate key for one provider's in-flight request cap. */

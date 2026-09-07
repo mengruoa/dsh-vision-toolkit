@@ -12,7 +12,7 @@ import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import { defineTool, type ToolDefinition } from '@deepseek-ai/dsh-tools'
 import type { Context } from '@deepseek-ai/cordis'
 import { VISION_SKILLS_CONTENT, VISION_SKILLS_NAME } from './skill.ts'
-import { VISION_TOOL_NAMES } from './tools.ts'
+import { VISION_TOOL_NAMES, type ToolVisibility } from './tools.ts'
 
 /** Small bootstrap tool retained only until the current Agent gains visual tools. */
 export const VISION_TOOLKIT_ACTIVATE = 'vision_toolkit_activate'
@@ -139,17 +139,21 @@ export class VisionToolExposure {
 
   /**
    * @param ctx - Plugin context with Tool and Agent registries.
-   * @param createTools - Fresh definitions bound to the current runtime generation.
+   * @param createTools - Fresh definitions bound to the current runtime
+   *   generation, filtered by a tool-visibility snapshot.
+   * @param resolveVisibility - Live resolver for the current tool-visibility
+   *   snapshot; read once per activation (a session-head snapshot).
    */
   constructor(
     private readonly ctx: Context,
-    private readonly createTools: () => ToolDefinition[],
+    private readonly createTools: (snapshot: ToolVisibility) => ToolDefinition[],
+    private readonly resolveVisibility: () => ToolVisibility = () => ({ local: true, online: true, video: false }),
   ) {
     this.activationTool = defineTool({
       name: VISION_TOOLKIT_ACTIVATE,
-      description: `Activate the independent Vision Toolkit execution tools for this Agent: ${Object.values(VISION_TOOL_NAMES).join(', ')}. `
-        + `Loading the ${VISION_SKILLS_NAME} Skill normally activates them automatically; call this once when the visual tools are still absent, then use them for image understanding, OCR, UI detection, and related tasks. `
-        + 'It is safe to call before the Skill is loaded, and this activation tool disappears after success.',
+      description: `Report and (re)mount the Vision Toolkit execution tools for this Agent: the currently visible subset of ${Object.values(VISION_TOOL_NAMES).join(', ')} plus optional video understanding. `
+        + `The visual tool set is normally mounted automatically when the ${VISION_SKILLS_NAME} Skill loads; call this ONLY when the user explicitly asks you to refresh or reload the current session's vision tools, or to list which vision tools are currently available. `
+        + 'It restores the tool set to the latest Settings snapshot and returns the tool names actually mounted.',
       parameters: {},
       output: {
         schema: {
@@ -166,9 +170,12 @@ export class VisionToolExposure {
         if (exec.agent === undefined) {
           throw new Error(`${VISION_TOOLKIT_ACTIVATE}: an Agent Session is required`)
         }
-        return Promise.resolve(this.activate(exec.agent))
+        // An already-active Agent is reloaded (re-reads the latest Settings
+        // snapshot) rather than returning the stale set, so the tool genuinely
+        // refreshes the visible tool list on an explicit user request.
+        return Promise.resolve(this.reload(exec.agent))
       },
-      presentCall: () => ({ card: 'generic', title: 'Activate vision tools', kind: 'execute' }),
+      presentCall: () => ({ card: 'generic', title: 'Refresh or list vision tools', kind: 'execute' }),
     })
   }
 
@@ -222,7 +229,7 @@ export class VisionToolExposure {
     if (state === undefined) throw new Error(`dsh-vision-toolkit: Agent ${String(agent.id)} has no exposure state`)
     if (state.active) return { activated: false, tools: [...state.toolNames] }
 
-    const definitions = this.createTools()
+    const definitions = this.createTools(this.resolveVisibility())
     const toolDisposers: Array<() => void> = []
     try {
       for (const definition of definitions) toolDisposers.push(agent.ctx.tools.register(definition))
@@ -239,6 +246,24 @@ export class VisionToolExposure {
     state.toolDisposers = toolDisposers
     state.toolNames = definitions.map(definition => definition.name)
     return { activated: true, tools: [...state.toolNames] }
+  }
+
+  /**
+   * Explicit refresh/reload from the bootstrap tool. An inactive Agent is
+   * mounted; an active Agent is torn down and re-mounted from the *current*
+   * Settings snapshot, so the returned tool list reflects the latest
+   * `toolVisibility` instead of the stale activation-time set.
+   */
+  private reload(agent: Agent): VisionToolkitActivationResult {
+    this.attach(agent)
+    const state = this.states.get(agent)
+    if (state === undefined) return { activated: false, tools: [] }
+    if (!state.active) return this.activate(agent)
+    // Dispose the current tool generation (including the hide-restriction on
+    // the bootstrap gauntlet) and rebuild from the fresh snapshot.
+    this.disposeState(state)
+    this.states.set(agent, { active: false, toolDisposers: [], toolNames: [] })
+    return this.activate(agent)
   }
 
   /** Whether the session is attached to the live SessionStore (production). */

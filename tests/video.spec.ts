@@ -184,16 +184,19 @@ describe('videoInfo', () => {
 })
 
 describe('video tool exposure', () => {
-  it('registers the video-understanding tool only when video support is enabled', async () => {
-    const off = await setupRuntime()
+  it('registers the video-understanding tool only when the video bucket is enabled', async () => {
+    const off = await setupRuntime({
+      provider: { baseUrl: 'https://vision.example/v1', credential: 'VISION_API_KEY', model: 'fixture-model', videoSupport: true },
+    })
+    // Default snapshot: video bucket off -> tool absent, even though the provider is video-capable.
     const offNames = createVisionTools(() => off.runtime).map(tool => tool.name)
     expect(offNames).toContain('vision_video_info')
     expect(offNames).not.toContain(VISION_VIDEO_UNDERSTAND_TOOL)
 
-    const on = await setupRuntime({
-      provider: { baseUrl: 'https://vision.example/v1', credential: 'VISION_API_KEY', model: 'fixture-model', videoSupport: true },
-    })
-    const onNames = createVisionTools(() => on.runtime).map(tool => tool.name)
+    // Video bucket on -> tool present regardless of provider capability flag.
+    const on = await setupRuntime()
+    const onNames = createVisionTools(() => on.runtime, undefined, undefined, { local: true, online: true, video: true })
+      .map(tool => tool.name)
     expect(onNames).toContain('vision_video_info')
     expect(onNames).toContain(VISION_VIDEO_UNDERSTAND_TOOL)
   })

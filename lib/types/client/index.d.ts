@@ -114,6 +114,14 @@ declare const en: {
     readonly hiddenVariants: "Transparent variant routing";
     readonly hiddenVariantsLabel: "Keep the original model names and enable images automatically";
     readonly hiddenVariantsHint: "Text-only models keep one model-selector entry with the original name while the session runs on the image-capable variant. Pasted images, image history, and the built-in read_image tool keep working; disable to restore the explicit (Vision Toolkit) entries.";
+    readonly toolVisibility: "Tool visibility";
+    readonly toolVisibilityHint: "Which groups of vision tools an Agent sees. Applies to the next Agent conversation: an already-active Agent keeps its activation-time set until it is reloaded.";
+    readonly toolVisibilityLocal: "Local tools";
+    readonly toolVisibilityLocalHint: "trace / crop / pixel diff / foreground / colors / HTML screenshot / video info. Local processing, no on-line parallel limits.";
+    readonly toolVisibilityOnline: "Online image tools";
+    readonly toolVisibilityOnlineHint: "glance / ground / detect / long-screenshot OCR, plus the concurrency/status probe. On-line service calls share the session concurrency budget.";
+    readonly toolVisibilityVideo: "Video tools";
+    readonly toolVisibilityVideoHint: "video understanding (experimental). Calling it without an enabled video-capable service returns \"video understanding unavailable\".";
     readonly pluginVersion: "Plugin";
     readonly upstreamVersion: "Upstream";
     readonly activeGeneration: "Runtime generation";
@@ -332,6 +340,11 @@ interface SettingsValue {
         providers?: string[];
         autoSwitch?: boolean;
         hidden?: boolean;
+    };
+    toolVisibility?: {
+        local?: boolean;
+        online?: boolean;
+        video?: boolean;
     };
 }
 type PluginUpdateUnavailableReason = 'profile-not-found' | 'not-direct-dependency' | 'unsupported-install-source' | 'profile-read-only' | 'pnpm-unavailable' | 'unsupported-platform' | 'restart-unmanaged' | 'restart-address-unavailable';

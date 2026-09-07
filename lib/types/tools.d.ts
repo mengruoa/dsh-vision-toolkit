@@ -28,6 +28,18 @@ export declare const VISION_TOOL_NAMES: {
  * Agent only when a vision service has video support enabled.
  */
 export declare const VISION_VIDEO_UNDERSTAND_TOOL = "vision_video_understand";
+/**
+ * Tool-group buckets used by the `toolVisibility` snapshot. A bucket that is
+ * off contributes none of its listed tools to an Agent's visible surface.
+ * - local: local-processing tools (no on-line fan-out, no concurrency charge).
+ * - online: on-line image tools plus the concurrency/status probe.
+ * - video: video-understanding tool (experimental).
+ */
+export interface ToolVisibility {
+    local: boolean;
+    online: boolean;
+    video: boolean;
+}
 /** Runtime lookup accepted by tools so Settings can atomically swap generations. */
 export type VisionToolkitRuntimeSource = VisionToolkitRuntime | (() => VisionToolkitRuntime);
 /** Browser-only metadata projector; the model-visible value remains unchanged. */
@@ -37,7 +49,9 @@ export type VisionToolkitPresentationProjector = (value: JsonValue) => JsonValue
  * @param source - Current runtime or atomic runtime lookup.
  * @param projectPresentation - Browser-only projection for Artifact capabilities.
  * @param lifecycleSignal - Plugin lifetime; aborting it cancels every active tool call.
+ * @param toolVisibility - Session-head visibility snapshot; a bucket that is off
+ *   contributes none of its tools. Defaults to every bucket on.
  * @returns Native tool definitions registered as one lifecycle generation.
  */
-export declare function createVisionTools(source: VisionToolkitRuntimeSource, projectPresentation?: VisionToolkitPresentationProjector, lifecycleSignal?: AbortSignal): ReturnType<typeof defineTool>[];
+export declare function createVisionTools(source: VisionToolkitRuntimeSource, projectPresentation?: VisionToolkitPresentationProjector, lifecycleSignal?: AbortSignal, toolVisibility?: ToolVisibility): ReturnType<typeof defineTool>[];
 //# sourceMappingURL=tools.d.ts.map

@@ -59,6 +59,45 @@ export const VISION_TOOL_NAMES = {
  */
 export const VISION_VIDEO_UNDERSTAND_TOOL = 'vision_video_understand'
 
+/**
+ * Tool-group buckets used by the `toolVisibility` snapshot. A bucket that is
+ * off contributes none of its listed tools to an Agent's visible surface.
+ * - local: local-processing tools (no on-line fan-out, no concurrency charge).
+ * - online: on-line image tools plus the concurrency/status probe.
+ * - video: video-understanding tool (experimental).
+ */
+export interface ToolVisibility {
+  local: boolean
+  online: boolean
+  video: boolean
+}
+
+const TOOL_BUCKETS: Record<string, 'local' | 'online' | 'video'> = {
+  [VISION_TOOL_NAMES.glance]: 'online',
+  [VISION_TOOL_NAMES.ground]: 'online',
+  [VISION_TOOL_NAMES.detect]: 'online',
+  [VISION_TOOL_NAMES.longScreenshotOcr]: 'online',
+  [VISION_TOOL_NAMES.concurrency]: 'online',
+  [VISION_TOOL_NAMES.trace]: 'local',
+  [VISION_TOOL_NAMES.crop]: 'local',
+  [VISION_TOOL_NAMES.pixelDiff]: 'local',
+  [VISION_TOOL_NAMES.extractForeground]: 'local',
+  [VISION_TOOL_NAMES.dominantColors]: 'local',
+  [VISION_TOOL_NAMES.htmlScreenshot]: 'local',
+  [VISION_TOOL_NAMES.videoInfo]: 'local',
+  [VISION_VIDEO_UNDERSTAND_TOOL]: 'video',
+}
+
+/** Filter one tool definition by the visibility snapshot's matching bucket. */
+function visibleBySnapshot(definition: { name: string }, snapshot: ToolVisibility): boolean {
+  switch (TOOL_BUCKETS[definition.name]) {
+    case 'local': return snapshot.local
+    case 'online': return snapshot.online
+    case 'video': return snapshot.video
+    default: return true
+  }
+}
+
 /** Resolve the caller workspace exactly like first-party fs/bash tools. */
 function sessionWorkspace(exec: ToolRunContext): string {
   return exec.agent?.session.header.cwd ?? process.cwd()
@@ -203,12 +242,15 @@ function runtimeFrom(source: VisionToolkitRuntimeSource): VisionToolkitRuntime {
  * @param source - Current runtime or atomic runtime lookup.
  * @param projectPresentation - Browser-only projection for Artifact capabilities.
  * @param lifecycleSignal - Plugin lifetime; aborting it cancels every active tool call.
+ * @param toolVisibility - Session-head visibility snapshot; a bucket that is off
+ *   contributes none of its tools. Defaults to every bucket on.
  * @returns Native tool definitions registered as one lifecycle generation.
  */
 export function createVisionTools(
   source: VisionToolkitRuntimeSource,
   projectPresentation: VisionToolkitPresentationProjector = presentationIdentity,
   lifecycleSignal?: AbortSignal,
+  toolVisibility: ToolVisibility = { local: true, online: true, video: false },
 ): ReturnType<typeof defineTool>[] {
   const presentationMeta = (_args: unknown, value: JsonValue): JsonValue => projectPresentation(value)
   const runtime = runtimeFrom(source)
@@ -614,7 +656,8 @@ export function createVisionTools(
     }),
     defineTool({
       name: VISION_TOOL_NAMES.concurrency,
-      description: 'Report the current available concurrency for vision tool calls in this session: the smaller of the remaining per-session slots and the total remaining model-request slots across enabled providers.',
+      description: 'Report the current available concurrency for ON-LINE vision tool calls (glance, ground, detect, long-screenshot OCR, video understanding) in this session: the smaller of the remaining per-session slots and the total remaining model-request slots across enabled providers. '
+        + 'Local-processing tools (trace, crop, pixel diff, extract foreground, colors, HTML screenshot, video info) are NOT throttled by this and run immediately.',
       parameters: {},
       output: {
         schema: {
@@ -678,13 +721,11 @@ export function createVisionTools(
       isConcurrencySafe: () => true,
       presentCall: args => ({ card: 'generic', title: `Inspect ${args.video}`, kind: 'read', locations: [{ path: args.video }] }),
     }),
-  ]
-  if (runtime.videoSupportEnabled) {
-    tools.push(defineTool({
+    defineTool({
       name: VISION_VIDEO_UNDERSTAND_TOOL,
       description: 'Send a local video plus a prompt to the configured vision service and return its answer text. '
         + 'The video is uploaded to object storage and passed as a video_url block (Aliyun Qwen format). '
-        + `This tool is only available when a vision service has video support enabled. ${UNTRUSTED_EVIDENCE_NOTE} ` + concurrencyNote + WORKSPACE_NOTE,
+        + `This tool exists only when the video tool bucket is enabled in Settings. Calling it without an enabled vision service that supports video returns a "video understanding unavailable" error. ${UNTRUSTED_EVIDENCE_NOTE} ` + concurrencyNote + WORKSPACE_NOTE,
       parameters: {
         video: { type: 'string', required: true, description: 'Video file path.' },
         prompt: { type: 'string', required: true, description: 'Question or instruction about the video.' },
@@ -709,9 +750,9 @@ export function createVisionTools(
         return runtimeFrom(source).videoUnderstand(request, callOptions(exec, args.timeoutSeconds, lifecycleSignal))
       },
       presentCall: args => ({ card: 'generic', title: `Understand ${args.video}`, kind: 'read', locations: [{ path: args.video }] }),
-    }))
-  }
-  return tools
+    }),
+  ]
+  return tools.filter(definition => visibleBySnapshot(definition, toolVisibility))
 }
 
 interface GlanceArgs {

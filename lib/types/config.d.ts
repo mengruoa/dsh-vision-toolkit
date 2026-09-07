@@ -153,6 +153,21 @@ export interface VisionToolkitConfig {
          */
         hidden?: boolean;
     };
+    /**
+     * Per-group tool visibility, applied when each Agent's visual tool set is
+     * materialized (a session-head snapshot: an already-active Agent keeps its
+     * activation-time set; a change only affects the next Agent's tool set).
+     * Tools are grouped into three buckets; a bucket that is off contributes none
+     * of its tools to an Agent's visible surface.
+     */
+    toolVisibility?: {
+        /** Local-processing tools (no on-line fan-out, no concurrency charge). Default true. */
+        local?: boolean;
+        /** On-line image tools plus the concurrency/status probe. Default true. */
+        online?: boolean;
+        /** Video-understanding tool (experimental). Default false. */
+        video?: boolean;
+    };
 }
 /** Configuration schema with the documented P0 defaults. */
 export declare const Config: Schema<VisionToolkitConfig>;
@@ -219,6 +234,11 @@ export interface ResolvedVisionToolkitConfig {
         providers: string[];
         autoSwitch: boolean;
         hidden: boolean;
+    };
+    toolVisibility: {
+        local: boolean;
+        online: boolean;
+        video: boolean;
     };
 }
 /**
