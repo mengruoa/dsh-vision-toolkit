@@ -29,11 +29,23 @@ import {
   isWithin,
   resolveHtmlFile,
   resolveInputFile,
+  resolveInputVideo,
   resolveOutputDirectory,
   resolveOutputFile,
   seedStagedDirectory,
   type PathPolicy,
 } from './paths.ts'
+import {
+  extractChatAnswer,
+  ffprobeBinaryPath,
+  parseFfprobeOutput,
+  videoMediaType,
+  type VideoInfo,
+  type VideoInfoRequest,
+  type VideoMetadata,
+  type VideoUnderstandRequest,
+  type VideoUnderstandResult,
+} from './video.ts'
 import {
   parseCropOutput,
   parseDominantColorsOutput,
@@ -815,6 +827,15 @@ export class VisionToolkitRuntime {
     return this.config.storageDir
   }
 
+  /**
+   * Whether at least one enabled OpenAI-compatible provider has video support
+   * turned on. Gates the model-facing video-understanding tool so an Agent only
+   * sees it when a vision service can actually accept video.
+   */
+  get videoSupportEnabled(): boolean {
+    return this.videoProvider() !== undefined
+  }
+
   /** Stable identity for persisted image descriptions produced by this runtime. */
   get evidenceFingerprint(): string {
     return evidenceRuntimeFingerprint(this.config, undefined, process.env.VISION_SSL_VERIFY?.trim())
@@ -970,6 +991,11 @@ export class VisionToolkitRuntime {
   /** Highest-priority enabled provider, falling back to the first entry. */
   private get primaryProvider(): ResolvedProvider {
     return this.config.providers.find(provider => provider.enabled) ?? this.config.providers[0]!
+  }
+
+  /** Highest-priority enabled OpenAI provider with video support enabled. */
+  private videoProvider(): ResolvedProvider | undefined {
+    return this.config.providers.find(provider => provider.enabled && provider.videoSupport && provider.protocol === 'openai')
   }
 
   /** Build the upstream environment for one resolved provider. */
@@ -1371,33 +1397,141 @@ export class VisionToolkitRuntime {
       }
       const uploaded = await client.uploadImage(VISION_MODEL_TEST_VIDEO, 'video/mp4')
       try {
-        operation.metrics.usedVisionService = true
-        const started = Date.now()
-        const response = await fetch(`${target.baseUrl}/chat/completions`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${entry.env.VISION_API_KEY}`,
-            'User-Agent': target.userAgent,
-          },
-          body: JSON.stringify({
-            model: target.model,
-            messages: [{
-              role: 'user',
-              content: [
-                { type: 'video_url', video_url: { url: uploaded.url }, fps: 2 },
-                { type: 'text', text: VISION_MODEL_TEST_VIDEO_PROMPT },
-              ],
-            }],
-          }),
-          signal: operation.signal,
-        })
-        operation.metrics.upstreamMs += Date.now() - started
-        const body = await response.text().catch(() => '')
-        if (!response.ok) {
-          throw new VisionToolkitError('service', `video call failed with HTTP ${response.status}: ${body.slice(0, 300)}`)
+        const answer = await this.requestVideoAnswer(target, entry.env.VISION_API_KEY, uploaded.url, VISION_MODEL_TEST_VIDEO_PROMPT, 2, operation)
+        const snippet = answer.trim().slice(0, 160)
+        return {
+          detail: snippet.length === 0
+            ? `Video call completed against ${target.model}`
+            : `Video call completed against ${target.model}: ${snippet}`,
         }
-        return { detail: `Video call completed against ${target.model} (HTTP ${response.status})` }
+      } finally {
+        await client.deleteObject(uploaded.key)
+      }
+    })
+  }
+
+  /** Run the bundled ffprobe binary once and parse its JSON metadata. */
+  private async runFfprobe(videoPath: string, operation: OperationContext): Promise<VideoMetadata> {
+    const binary = ffprobeBinaryPath()
+    if (binary === null) {
+      throw new VisionToolkitError('runtime', 'ffprobe is unavailable; the ffprobe-static package must be installed alongside the plugin')
+    }
+    const handle = this.ctx.subprocess.spawn({
+      argv: [binary, '-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', videoPath],
+      cwd: process.cwd(),
+      stdio: {
+        stdin: 'ignore',
+        stdout: { maxBytes: 512 * 1024 },
+        stderr: { maxBytes: 64 * 1024 },
+      },
+      graceMs: 2000,
+      signal: operation.signal,
+    })
+    const outcome = await handle.done
+    const stdout = handle.collected.stdout?.readFrom(0)
+    const stderr = handle.collected.stderr?.readFrom(0)
+    if (outcome.exitCode !== 0) {
+      throw new VisionToolkitError('input', `cannot read video metadata: ${(stderr?.text ?? '').trim() || 'ffprobe failed'}`)
+    }
+    if (stdout?.lossy === true) {
+      throw new VisionToolkitError('output', 'video metadata output exceeded the capture limit')
+    }
+    try {
+      return parseFfprobeOutput(stdout?.text ?? '')
+    } catch (error) {
+      throw new VisionToolkitError('output', 'video metadata output is invalid', { cause: error })
+    }
+  }
+
+  /**
+   * One OpenAI-compatible (Aliyun Qwen) video chat-completions request. The
+   * content array carries the video_url block (with `fps`) plus the prompt text.
+   */
+  private async requestVideoAnswer(
+    target: ResolvedProvider,
+    apiKey: string,
+    videoUrl: string,
+    prompt: string,
+    fps: number,
+    operation: OperationContext,
+  ): Promise<string> {
+    operation.metrics.usedVisionService = true
+    const started = Date.now()
+    const response = await fetch(`${target.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+        'User-Agent': target.userAgent,
+      },
+      body: JSON.stringify({
+        model: target.model,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'video_url', video_url: { url: videoUrl }, fps },
+            { type: 'text', text: prompt },
+          ],
+        }],
+      }),
+      signal: operation.signal,
+    })
+    operation.metrics.upstreamMs += Date.now() - started
+    const body = await response.text().catch(() => '')
+    if (!response.ok) {
+      throw new VisionToolkitError('service', `video request failed with HTTP ${response.status}: ${body.slice(0, 300)}`)
+    }
+    const answer = extractChatAnswer(body)
+    if (answer.trim().length === 0) {
+      throw new VisionToolkitError('output', 'vision API returned an empty answer')
+    }
+    return answer
+  }
+
+  /** Local video basic-info probe: ffprobe metadata, no API or credential. */
+  async videoInfo(request: VideoInfoRequest, options: ToolCallOptions): Promise<VideoInfo> {
+    return this.runOperation('vision_video_info', options, async (operation) => {
+      const policy = await this.pathPolicy(options.workspace)
+      const resolved = await resolveInputVideo(request.video, policy)
+      const metadata = await this.runFfprobe(resolved.path, operation)
+      return { path: resolved.path, bytes: resolved.bytes, ...metadata }
+    })
+  }
+
+  /**
+   * Video understanding: upload the video to object storage and send it plus a
+   * prompt to the first enabled OpenAI provider with video support. Only
+   * callable when `videoSupportEnabled` is true (the tool is not exposed
+   * otherwise); the runtime re-checks so a stale registration still fails safe.
+   */
+  async videoUnderstand(request: VideoUnderstandRequest, options: ToolCallOptions): Promise<VideoUnderstandResult> {
+    return this.runOperation('vision_video_understand', options, async (operation) => {
+      const target = this.videoProvider()
+      if (target === undefined) {
+        throw new VisionToolkitError('config', 'no enabled vision service has video support; enable it in Settings first')
+      }
+      const entry = await this.resolveProviderEnv(target)
+      if (entry === undefined) {
+        throw new VisionToolkitError('config', `credential ${String(target.credential)} is not configured`)
+      }
+      const prompt = request.prompt.trim()
+      if (prompt.length === 0) {
+        throw new VisionToolkitError('input', 'prompt must not be empty')
+      }
+      const fps = request.fps ?? 2
+      if (!Number.isInteger(fps) || fps < 1 || fps > 120) {
+        throw new VisionToolkitError('input', 'fps must be an integer between 1 and 120')
+      }
+      const policy = await this.pathPolicy(options.workspace)
+      const resolved = await resolveInputVideo(request.video, policy)
+      const client = await this.resolveObjectStorageClient()
+      if (client === undefined) {
+        throw new VisionToolkitError('config', 'object storage is not configured (endpoint, bucket, and credential are required)')
+      }
+      const uploaded = await client.uploadImage(resolved.path, videoMediaType(extname(resolved.path).toLowerCase()))
+      try {
+        const answer = await this.requestVideoAnswer(target, entry.env.VISION_API_KEY, uploaded.url, prompt, fps, operation)
+        return { path: resolved.path, answer }
       } finally {
         await client.deleteObject(uploaded.key)
       }

@@ -8,6 +8,8 @@
 import type { Stats } from 'node:fs';
 /** Supported input image extensions (the upstream client's allowlist). */
 export declare const SUPPORTED_IMAGE_EXTENSIONS: readonly [".png", ".jpg", ".jpeg", ".gif", ".webp"];
+/** Supported input video extensions probed with the bundled ffprobe binary. */
+export declare const SUPPORTED_VIDEO_EXTENSIONS: readonly [".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v", ".mpg", ".mpeg", ".wmv", ".flv", ".ts", ".m2ts", ".3gp"];
 /** Resolved path policy for one tool invocation. */
 export interface PathPolicy {
     /** Real workspace root. */
@@ -91,6 +93,11 @@ export declare function resolveAuthorizedFile(raw: string, policy: PathPolicy, e
 }>;
 /** Validate a local HTML document; URL and data-URI inputs never reach Chrome. */
 export declare function resolveHtmlFile(raw: string, policy: PathPolicy): Promise<{
+    path: string;
+    bytes: number;
+}>;
+/** Validate one input video path against the video extension allowlist. */
+export declare function resolveInputVideo(raw: string, policy: PathPolicy): Promise<{
     path: string;
     bytes: number;
 }>;

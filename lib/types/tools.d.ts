@@ -20,7 +20,14 @@ export declare const VISION_TOOL_NAMES: {
     readonly dominantColors: "vision_dominant_colors";
     readonly htmlScreenshot: "vision_html_screenshot";
     readonly concurrency: "vision_concurrency";
+    readonly videoInfo: "vision_video_info";
 };
+/**
+ * Opt-in video-understanding tool name. Deliberately outside {@link VISION_TOOL_NAMES}
+ * so the always-registered canonical set stays unconditional; this tool enters an
+ * Agent only when a vision service has video support enabled.
+ */
+export declare const VISION_VIDEO_UNDERSTAND_TOOL = "vision_video_understand";
 /** Runtime lookup accepted by tools so Settings can atomically swap generations. */
 export type VisionToolkitRuntimeSource = VisionToolkitRuntime | (() => VisionToolkitRuntime);
 /** Browser-only metadata projector; the model-visible value remains unchanged. */

@@ -26,6 +26,7 @@ const VISUAL_TOOL_NAMES = [
   'vision_extract_foreground',
   'vision_dominant_colors',
   'vision_html_screenshot',
+  'vision_video_info',
 ] as const
 const DIAGNOSTIC_TOOL_NAMES = ['vision_toolkit_health', 'vision_toolkit_version'] as const
 

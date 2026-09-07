@@ -59,6 +59,20 @@ describe('resolveConfig', () => {
     expect(resolveConfig({}).provider.uploadViaUrl).toBe(false)
   })
 
+  it('resolves the video-support flag with a false default', () => {
+    expect(resolveConfig({}).provider.videoSupport).toBe(false)
+    expect(resolveConfig({ provider: { videoSupport: true } }).provider.videoSupport).toBe(true)
+    const pool = resolveConfig({
+      providers: [
+        { name: 'A', baseUrl: 'https://a.example/v1', credential: 'KEY_A', model: 'model-a', videoSupport: true },
+        { name: 'B', baseUrl: 'https://b.example/v1', credential: 'KEY_B', model: 'model-b' },
+      ],
+    })
+    expect(pool.providers[0]?.videoSupport).toBe(true)
+    expect(pool.providers[1]?.videoSupport).toBe(false)
+    expect(pool.provider.videoSupport).toBe(true)
+  })
+
   it('normalizes image-input variant settings', () => {
     const config = resolveConfig({
       imageInputVariants: {

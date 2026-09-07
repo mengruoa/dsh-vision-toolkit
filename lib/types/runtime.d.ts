@@ -8,6 +8,7 @@
 import type { Context } from '@deepseek-ai/cordis';
 import { type ArtifactDescriptor } from './artifacts.ts';
 import { type ResolvedProvider, type ResolvedVisionToolkitConfig } from './config.ts';
+import { type VideoInfo, type VideoInfoRequest, type VideoUnderstandRequest, type VideoUnderstandResult } from './video.ts';
 import { UpstreamAdapter, type DominantColorsOutput, type UpstreamEnvironment, type UpstreamVersionInfo } from './upstream.ts';
 /** Per-invocation cancellation and timeout facts. */
 export interface Deadline {
@@ -394,6 +395,12 @@ export declare class VisionToolkitRuntime {
     get sessionMaxConcurrency(): number;
     /** Shared storage root belonging to this immutable runtime generation. */
     get storageDirectory(): string | undefined;
+    /**
+     * Whether at least one enabled OpenAI-compatible provider has video support
+     * turned on. Gates the model-facing video-understanding tool so an Agent only
+     * sees it when a vision service can actually accept video.
+     */
+    get videoSupportEnabled(): boolean;
     /** Stable identity for persisted image descriptions produced by this runtime. */
     get evidenceFingerprint(): string;
     /** Capture the credential and provider identity used by one evidence conversion. */
@@ -408,6 +415,8 @@ export declare class VisionToolkitRuntime {
     private runOperation;
     /** Highest-priority enabled provider, falling back to the first entry. */
     private get primaryProvider();
+    /** Highest-priority enabled OpenAI provider with video support enabled. */
+    private videoProvider;
     /** Build the upstream environment for one resolved provider. */
     private providerEnv;
     /** Resolve one provider's credential into its environment, or undefined when unavailable. */
@@ -446,6 +455,22 @@ export declare class VisionToolkitRuntime {
     testVideoCall(options: ToolCallOptions, provider?: ResolvedProvider): Promise<{
         detail: string;
     }>;
+    /** Run the bundled ffprobe binary once and parse its JSON metadata. */
+    private runFfprobe;
+    /**
+     * One OpenAI-compatible (Aliyun Qwen) video chat-completions request. The
+     * content array carries the video_url block (with `fps`) plus the prompt text.
+     */
+    private requestVideoAnswer;
+    /** Local video basic-info probe: ffprobe metadata, no API or credential. */
+    videoInfo(request: VideoInfoRequest, options: ToolCallOptions): Promise<VideoInfo>;
+    /**
+     * Video understanding: upload the video to object storage and send it plus a
+     * prompt to the first enabled OpenAI provider with video support. Only
+     * callable when `videoSupportEnabled` is true (the tool is not exposed
+     * otherwise); the runtime re-checks so a stale registration still fails safe.
+     */
+    videoUnderstand(request: VideoUnderstandRequest, options: ToolCallOptions): Promise<VideoUnderstandResult>;
     /** Stable gate key for one provider's in-flight request cap. */
     private providerGate;
     /**

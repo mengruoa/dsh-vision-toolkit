@@ -22,7 +22,7 @@ import {
 } from '../src/exposure.ts'
 import { bundledUpstreamRoot } from '../src/runtime-install.ts'
 import { VISION_SKILLS_CONTENT, VISION_SKILLS_NAME, VISION_SKILLS_RESOURCE_BASE } from '../src/skill.ts'
-import { VISION_TOOL_NAMES } from '../src/tools.ts'
+import { VISION_TOOL_NAMES, VISION_VIDEO_UNDERSTAND_TOOL } from '../src/tools.ts'
 
 const BUNDLED_UPSTREAM = bundledUpstreamRoot()
 const SAMPLE_IMAGE = fileURLToPath(new URL('./fixtures/sample.png', import.meta.url))
@@ -212,7 +212,7 @@ async function loadVisionSkill(ctx: Context, agent: Agent): Promise<void> {
   expect(result.isError, JSON.stringify(result)).toBe(false)
 }
 
-async function setupContext(toolkitPath: string) {
+async function setupContext(toolkitPath: string, videoSupport = false) {
   const ctx = new Context()
   contexts.push(ctx)
   await ctx.plugin(SystemPrompt)
@@ -229,6 +229,7 @@ async function setupContext(toolkitPath: string) {
       baseUrl: 'https://vision.example/v1',
       credential: 'VISION_API_KEY',
       model: 'fixture-model',
+      videoSupport,
     },
     runtime: { mode: 'external', agentVisionToolkitPath: toolkitPath, python: 'python3' },
   })
@@ -274,6 +275,22 @@ describe('dsh-vision-toolkit plugin lifecycle', () => {
     expect(glance?.description).toContain('/tmp/')
     expect(ctx.tools.schemas(untouched).map(tool => tool.name)).toContain(VISION_TOOLKIT_ACTIVATE)
     expect(ctx.tools.schemas(untouched).some(tool => TOOL_NAMES.includes(tool.name))).toBe(false)
+  })
+
+  it('exposes the video-understanding tool only when a vision service enables video support', async () => {
+    const off = await setupContext(BUNDLED_UPSTREAM, false)
+    const offAgent = await registerAgent(off.ctx, 'video-off')
+    await loadVisionSkill(off.ctx, offAgent)
+    const offNames = off.ctx.tools.schemas(offAgent).map(tool => tool.name)
+    expect(offNames).toContain(VISION_TOOL_NAMES.videoInfo)
+    expect(offNames).not.toContain(VISION_VIDEO_UNDERSTAND_TOOL)
+
+    const on = await setupContext(BUNDLED_UPSTREAM, true)
+    const onAgent = await registerAgent(on.ctx, 'video-on')
+    await loadVisionSkill(on.ctx, onAgent)
+    const onNames = on.ctx.tools.schemas(onAgent).map(tool => tool.name)
+    expect(onNames).toContain(VISION_TOOL_NAMES.videoInfo)
+    expect(onNames).toContain(VISION_VIDEO_UNDERSTAND_TOOL)
   })
 
   it('restores native Skill activation before a persisted Agent is registered', async () => {

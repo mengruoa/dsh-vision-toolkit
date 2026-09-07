@@ -80,6 +80,9 @@ importers:
       '@deepseek-ai/schemastery':
         specifier: ^3.18.1
         version: 3.18.1
+      ffprobe-static:
+        specifier: 3.1.0
+        version: 3.1.0
       react:
         specifier: ^18.2.0
         version: 18.2.0
@@ -1363,6 +1366,9 @@ packages:
 
   fflate@0.8.3:
     resolution: {integrity: sha512-tbZNuJrLwGUp3zshBtdy4W+ORxZuIh8a5ilyIEQDC5rY1f3U20JMry0Ll3WBzU58EZKsEuJFXhb5gwv8CsPvgA==}
+
+  ffprobe-static@3.1.0:
+    resolution: {integrity: sha512-Dvpa9uhVMOYivhHKWLGDoa512J751qN1WZAIO+Xw4L/mrUSPxS4DApzSUDbCFE/LUq2+xYnznEahTd63AqBSpA==}
 
   figures@6.1.0:
     resolution: {integrity: sha512-d+l3qxjSesT4V7v2fh+QnmFnUWv9lSpjarhShNTgBOfA0ttejbQUAlHLitbjkoRiDulW0OPoQPYIGhIC8ohejg==}
@@ -3486,6 +3492,8 @@ snapshots:
       picomatch: 4.0.5
 
   fflate@0.8.3: {}
+
+  ffprobe-static@3.1.0: {}
 
   figures@6.1.0:
     dependencies:

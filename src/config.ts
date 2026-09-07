@@ -210,6 +210,8 @@ export const Config: Schema<VisionToolkitConfig> = z.object({
     anthropicThinking: z.union(['omit', 'disabled', 'adaptive'] as const).default('omit'),
     userAgent: z.string().default(DEFAULT_VISION_USER_AGENT),
     stream: z.boolean().default(false),
+    uploadViaUrl: z.boolean().default(false),
+    videoSupport: z.boolean().default(false),
   }),
   providers: z.array(z.object({
     name: z.string(),

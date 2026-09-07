@@ -16,6 +16,12 @@ import { VisionToolkitError } from './errors.ts'
 /** Supported input image extensions (the upstream client's allowlist). */
 export const SUPPORTED_IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp'] as const
 
+/** Supported input video extensions probed with the bundled ffprobe binary. */
+export const SUPPORTED_VIDEO_EXTENSIONS = [
+  '.mp4', '.mov', '.webm', '.mkv', '.avi', '.m4v',
+  '.mpg', '.mpeg', '.wmv', '.flv', '.ts', '.m2ts', '.3gp',
+] as const
+
 /** Resolved path policy for one tool invocation. */
 export interface PathPolicy {
   /** Real workspace root. */
@@ -397,6 +403,11 @@ export async function resolveAuthorizedFile(
 /** Validate a local HTML document; URL and data-URI inputs never reach Chrome. */
 export function resolveHtmlFile(raw: string, policy: PathPolicy): Promise<{ path: string; bytes: number }> {
   return resolveAuthorizedFile(raw, policy, ['.html', '.htm'], 'HTML source')
+}
+
+/** Validate one input video path against the video extension allowlist. */
+export function resolveInputVideo(raw: string, policy: PathPolicy): Promise<{ path: string; bytes: number }> {
+  return resolveAuthorizedFile(raw, policy, SUPPORTED_VIDEO_EXTENSIONS, 'video')
 }
 
 /**

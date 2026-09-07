@@ -22,6 +22,7 @@ import {
   type TraceRequest,
 } from './runtime.ts'
 import { platformTempDirectory } from './paths.ts'
+import type { VideoInfoRequest, VideoUnderstandRequest } from './video.ts'
 
 const renderJson = (_args: unknown, value: unknown): ContentBlock[] => [{
   type: 'text',
@@ -48,7 +49,15 @@ export const VISION_TOOL_NAMES = {
   dominantColors: 'vision_dominant_colors',
   htmlScreenshot: 'vision_html_screenshot',
   concurrency: 'vision_concurrency',
+  videoInfo: 'vision_video_info',
 } as const
+
+/**
+ * Opt-in video-understanding tool name. Deliberately outside {@link VISION_TOOL_NAMES}
+ * so the always-registered canonical set stays unconditional; this tool enters an
+ * Agent only when a vision service has video support enabled.
+ */
+export const VISION_VIDEO_UNDERSTAND_TOOL = 'vision_video_understand'
 
 /** Resolve the caller workspace exactly like first-party fs/bash tools. */
 function sessionWorkspace(exec: ToolRunContext): string {
@@ -122,6 +131,19 @@ const requiredBoxSchema = { ...boxSchema, required: true } as const
 const requiredImageInfoSchema = { ...imageInfoSchema, required: true } as const
 const requiredArtifactSchema = { ...artifactSchema, required: true } as const
 
+const nullableStringSchema = {
+  oneOf: [{ type: 'string' }, { type: 'null' }],
+} as const satisfies ValueSchemaSpec
+const nullableIntegerSchema = {
+  oneOf: [{ type: 'integer' }, { type: 'null' }],
+} as const satisfies ValueSchemaSpec
+const nullableNumberSchema = {
+  oneOf: [{ type: 'number' }, { type: 'null' }],
+} as const satisfies ValueSchemaSpec
+const requiredNullableStringSchema = { ...nullableStringSchema, required: true } as const
+const requiredNullableIntegerSchema = { ...nullableIntegerSchema, required: true } as const
+const requiredNullableNumberSchema = { ...nullableNumberSchema, required: true } as const
+
 const locatedMatchSchema = {
   type: 'object',
   additionalProperties: false,
@@ -189,9 +211,10 @@ export function createVisionTools(
   lifecycleSignal?: AbortSignal,
 ): ReturnType<typeof defineTool>[] {
   const presentationMeta = (_args: unknown, value: JsonValue): JsonValue => projectPresentation(value)
-  const sessionMaxConcurrency = runtimeFrom(source).sessionMaxConcurrency
+  const runtime = runtimeFrom(source)
+  const sessionMaxConcurrency = runtime.sessionMaxConcurrency
   const concurrencyNote = `A single session runs at most ${sessionMaxConcurrency} concurrent vision calls; query vision_concurrency for the live available count. `
-  return [
+  const tools: ReturnType<typeof defineTool>[] = [
     defineTool({
       name: VISION_TOOL_NAMES.glance,
       description: 'Describe, answer a targeted question about, OCR, or compare one or more images with the configured vision model. '
@@ -621,7 +644,74 @@ export function createVisionTools(
       isConcurrencySafe: () => true,
       presentCall: () => ({ card: 'generic', title: 'Vision concurrency', kind: 'read', locations: [] }),
     }),
+    defineTool({
+      name: VISION_TOOL_NAMES.videoInfo,
+      description: 'Probe a local video file and return its basic metadata (container format, duration, resolution, frame rate, codecs, and stream counts) using the bundled ffprobe binary. '
+        + 'This is a local operation and never calls a vision API or needs a credential. ' + concurrencyNote + WORKSPACE_NOTE,
+      parameters: {
+        video: { type: 'string', required: true, description: 'Video file path.' },
+        timeoutSeconds: { type: 'integer', description: TIMEOUT_NOTE },
+      },
+      output: {
+        schema: {
+          type: 'object', additionalProperties: false, properties: {
+            path: { type: 'string', required: true },
+            bytes: { type: 'integer', required: true },
+            format: { type: 'string', required: true },
+            durationSeconds: requiredNullableNumberSchema,
+            width: requiredNullableIntegerSchema,
+            height: requiredNullableIntegerSchema,
+            frameRate: requiredNullableNumberSchema,
+            videoCodec: requiredNullableStringSchema,
+            audioCodec: requiredNullableStringSchema,
+            bitRate: requiredNullableIntegerSchema,
+            videoStreamCount: { type: 'integer', required: true },
+            audioStreamCount: { type: 'integer', required: true },
+          },
+        },
+        render: renderJson,
+      },
+      async execute(args: VideoInfoArgs, exec) {
+        const request: VideoInfoRequest = { video: args.video }
+        return runtimeFrom(source).videoInfo(request, callOptions(exec, args.timeoutSeconds, lifecycleSignal))
+      },
+      isConcurrencySafe: () => true,
+      presentCall: args => ({ card: 'generic', title: `Inspect ${args.video}`, kind: 'read', locations: [{ path: args.video }] }),
+    }),
   ]
+  if (runtime.videoSupportEnabled) {
+    tools.push(defineTool({
+      name: VISION_VIDEO_UNDERSTAND_TOOL,
+      description: 'Send a local video plus a prompt to the configured vision service and return its answer text. '
+        + 'The video is uploaded to object storage and passed as a video_url block (Aliyun Qwen format). '
+        + `This tool is only available when a vision service has video support enabled. ${UNTRUSTED_EVIDENCE_NOTE} ` + concurrencyNote + WORKSPACE_NOTE,
+      parameters: {
+        video: { type: 'string', required: true, description: 'Video file path.' },
+        prompt: { type: 'string', required: true, description: 'Question or instruction about the video.' },
+        fps: { type: 'integer', description: 'Video sampling frame rate passed to the model; default 2.' },
+        timeoutSeconds: { type: 'integer', description: TIMEOUT_NOTE },
+      },
+      output: {
+        schema: {
+          type: 'object', additionalProperties: false, properties: {
+            path: { type: 'string', required: true },
+            answer: { type: 'string', required: true },
+          },
+        },
+        render: renderJson,
+      },
+      async execute(args: VideoUnderstandArgs, exec) {
+        const request: VideoUnderstandRequest = {
+          video: args.video,
+          prompt: args.prompt,
+          ...(args.fps === undefined ? {} : { fps: args.fps }),
+        }
+        return runtimeFrom(source).videoUnderstand(request, callOptions(exec, args.timeoutSeconds, lifecycleSignal))
+      },
+      presentCall: args => ({ card: 'generic', title: `Understand ${args.video}`, kind: 'read', locations: [{ path: args.video }] }),
+    }))
+  }
+  return tools
 }
 
 interface GlanceArgs {
@@ -720,5 +810,15 @@ interface HtmlArgs {
   waitMs?: number
   fullPage?: boolean
   output?: string
+  timeoutSeconds?: number
+}
+interface VideoInfoArgs {
+  video: string
+  timeoutSeconds?: number
+}
+interface VideoUnderstandArgs {
+  video: string
+  prompt: string
+  fps?: number
   timeoutSeconds?: number
 }
